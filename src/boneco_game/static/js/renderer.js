@@ -5,8 +5,9 @@ const SHORT_PAUSE_LIMIT = 0.35;
 const DEFAULT_MICRO_PAUSE_MAX = 0.35;
 const DEFAULT_PAUSE_TO_MUTE_MIN = 2.0;
 const DEFAULT_MUTE_SWITCH_ADVANCE = 0.025;
-const STALLED_VIDEO_NUDGE_MS = 650;
-const STALLED_VIDEO_SWITCH_MS = 1300;
+const STALLED_VIDEO_PLAY_RETRY_MS = 2500;
+const STALLED_VIDEO_SWITCH_MS = 4000;
+const STALLED_VIDEO_RELOAD_MS = 8000;
 const WALK_START_MS = 1550;
 const WALK_STOP_MS = 6800;
 const WALK_TRANSITION_TIME_SCALE = 2.25;
@@ -23,7 +24,11 @@ const BELLY_PROFILE_BASE_SIZE = 92;
 const stage = document.getElementById("stage");
 const cameraLayer = document.getElementById("cameraLayer");
 const tunnelCanvas = document.getElementById("tunnelCanvas");
+const tunnelFloorCanvas = document.getElementById("tunnelFloorCanvas");
+const tunnelWallCanvas = document.getElementById("tunnelWallCanvas");
 const tunnelCtx = tunnelCanvas ? tunnelCanvas.getContext("2d", { alpha: false }) : null;
+const tunnelFloorCtx = tunnelFloorCanvas ? tunnelFloorCanvas.getContext("2d", { alpha: true }) : null;
+const tunnelWallCtx = tunnelWallCanvas ? tunnelWallCanvas.getContext("2d", { alpha: true }) : null;
 const skyLayer = document.getElementById("skyLayer");
 const world = document.getElementById("world");
 const actorLayer = document.getElementById("actorLayer");
@@ -50,6 +55,7 @@ let currentVideo = "";
 let currentScene = "";
 let currentMap = null;
 let visualMode = "tunnel";
+let tunnelStyle = "classic";
 let mapSignature = "";
 let mapRuntimeKey = "";
 let skyRuntimeKey = "";
@@ -64,6 +70,8 @@ let musicBass = 0;
 let tunnelHue = 144;
 let tunnelPeople = [];
 let tunnelPeopleSignature = "";
+let giftWall = [];
+let giftWallSignature = "";
 const tunnelImageCache = new Map();
 let mediaState = {
   idle: [],
@@ -102,8 +110,16 @@ let runtimeConfig = {
 let timelineFrame = 0;
 let timelineFinishTimer = 0;
 let videoWatchdogFrame = 0;
-let videoWatchdogState = { src: "", time: 0, wallAt: 0 };
+let videoWatchdogState = {
+  src: "",
+  time: 0,
+  wallAt: 0,
+  lastPresentedFrameAt: 0,
+  presentedFrames: 0,
+  callbackVideo: null,
+};
 let videoRecoveryBusy = false;
+let videoFrameCallbackToken = 0;
 let bellyTrackFrame = 0;
 let bellyTrackLastScan = 0;
 let bellyTrackMisses = 0;
@@ -323,6 +339,116 @@ function mediaImageUrl(path) {
     return clean;
   }
   return fileUrl(clean);
+}
+
+function superCubeInitials(item) {
+  const label = String(
+    item?.display_name ||
+    item?.displayName ||
+    item?.username ||
+    "?"
+  ).trim();
+
+  if (!label) return "?";
+
+  const parts = label.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return (
+      String(parts[0][0] || "") +
+      String(parts[parts.length - 1][0] || "")
+    ).toUpperCase();
+  }
+
+  return label.slice(0, 2).toUpperCase();
+}
+
+function syncSuperCube(item, style = "") {
+  const layer = document.getElementById("superCubeLayer");
+  if (!layer) return;
+
+  const cleanStyle = String(style || "").trim();
+  const isOrbital = cleanStyle === "orbital_cathedral";
+
+  const total = Math.max(
+    0,
+    Math.round(Number(item?.total_count || item?.count || 0))
+  );
+
+  const username = String(item?.username || "").trim();
+  const displayName = String(
+    item?.display_name || item?.displayName || username
+  ).trim();
+
+  const hasLeader = Boolean(item && (username || displayName) && total > 0);
+
+  if (!isOrbital || !hasLeader) {
+    layer.hidden = true;
+    return;
+  }
+
+  layer.hidden = false;
+
+  const profile = String(
+    item?.profile_image ||
+    item?.avatar_url ||
+    item?.profile ||
+    ""
+  ).trim();
+
+  const initials = superCubeInitials(item);
+  const imageUrl = profile ? mediaImageUrl(profile) : "";
+
+  const images = Array.from(
+    layer.querySelectorAll(".super-cube-image")
+  );
+  const fallbacks = Array.from(
+    layer.querySelectorAll(".super-cube-fallback")
+  );
+
+  fallbacks.forEach((fallback) => {
+    fallback.textContent = initials;
+    fallback.hidden = Boolean(imageUrl);
+  });
+
+  images.forEach((img, index) => {
+    if (!imageUrl) {
+      img.hidden = true;
+      img.removeAttribute("src");
+      return;
+    }
+
+    img.hidden = false;
+    img.alt = displayName || username || "Líder de presentes";
+
+    const onError = () => {
+      img.hidden = true;
+      if (fallbacks[index]) fallbacks[index].hidden = false;
+    };
+
+    img.onerror = onError;
+
+    if (img.src !== new URL(imageUrl, window.location.href).href) {
+      img.src = imageUrl;
+    }
+  });
+
+  const name = document.getElementById("superCubeName");
+  const score = document.getElementById("superCubeScore");
+
+  if (name) {
+    name.textContent = displayName || username || "TOP PRESENTES";
+  }
+
+  if (score) {
+    const events = Math.max(
+      0,
+      Math.round(Number(item?.gift_events || 0))
+    );
+
+    score.textContent =
+      `${total} presente${total === 1 ? "" : "s"}` +
+      (events > 1 ? ` • ${events} envios` : "");
+  }
 }
 
 function syncTunnelPeople(people) {
@@ -729,18 +855,1260 @@ function drawTunnelDepthLines(ctx, center, hue, power, time, wallOrbit) {
   }
   ctx.restore();
 }
+function clearTunnelFloorOverlay() {
+  if (!tunnelFloorCtx || !tunnelFloorCanvas) return;
+  tunnelFloorCtx.setTransform(1, 0, 0, 1, 0, 0);
+  tunnelFloorCtx.clearRect(0, 0, TUNNEL_W, TUNNEL_H);
+}
+
+function drawOrbitalFloorOverlay(timeMs = performance.now()) {
+  if (!tunnelFloorCtx || !tunnelFloorCanvas) return;
+
+  const ctx = tunnelFloorCtx;
+  const w = TUNNEL_W;
+  const h = TUNNEL_H;
+  const time = Number(timeMs || 0) * 0.001;
+  const energy = Math.max(0, Math.min(1, Number(musicEnergy || 0)));
+  const bass = Math.max(0, Math.min(1, Number(musicBass || 0)));
+
+  const floorHorizonY = h * 0.675;
+  const floorBottom = h * 1.035;
+  const cx = w * 0.5;
+  const rows = 11;
+  const cols = 7;
+  const beatStep = Math.floor(time * (0.45 + bass * 1.35));
+
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = 1;
+
+  // Máscara/base totalmente opaca.
+  const base = ctx.createLinearGradient(0, floorHorizonY, 0, h);
+  base.addColorStop(0, "#03060e");
+  base.addColorStop(0.18, "#02040a");
+  base.addColorStop(1, "#000003");
+
+  ctx.fillStyle = base;
+  ctx.beginPath();
+  ctx.moveTo(cx - 36, floorHorizonY);
+  ctx.lineTo(cx + 36, floorHorizonY);
+  ctx.lineTo(w * 1.10, floorBottom);
+  ctx.lineTo(w * -0.10, floorBottom);
+  ctx.closePath();
+  ctx.fill();
+
+  const people = Array.isArray(tunnelPeople) ? tunnelPeople : [];
+  const giftPeople = people
+    .filter(person =>
+      Number(person?.weight || 1) > 1 &&
+      String(person?.profile || "").trim()
+    )
+    .slice(0, 14);
+
+  const slots = [];
+  for (let row = 2; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      if ((row * 3 + col * 5) % 4 === 0) {
+        slots.push({ row, col });
+      }
+    }
+  }
+
+  const giftTileMap = new Map();
+  for (let i = 0; i < Math.min(giftPeople.length, slots.length); i += 1) {
+    giftTileMap.set(`${slots[i].row}:${slots[i].col}`, giftPeople[i]);
+  }
+
+  function tilePath(x00, y0, x01, x11, y1, x10) {
+    ctx.beginPath();
+    ctx.moveTo(x00, y0);
+    ctx.lineTo(x01, y0);
+    ctx.lineTo(x11, y1);
+    ctx.lineTo(x10, y1);
+    ctx.closePath();
+  }
+
+  function drawPersonTile(person, x00, y0, x01, x11, y1, x10, hue) {
+    const entry = tunnelImageEntry(person?.profile);
+    if (!entry) return false;
+
+    const img = entry.img;
+    const iw = img.naturalWidth || img.width;
+    const ih = img.naturalHeight || img.height;
+    if (!iw || !ih) return false;
+
+    const side = Math.min(iw, ih);
+    const sx = (iw - side) * 0.5;
+    const sy = (ih - side) * 0.5;
+
+    const minX = Math.min(x00, x01, x10, x11);
+    const maxX = Math.max(x00, x01, x10, x11);
+    const minY = y0;
+    const maxY = y1;
+
+    ctx.save();
+    tilePath(x00, y0, x01, x11, y1, x10);
+    ctx.clip();
+
+    // Somente a FOTO possui transparência.
+    ctx.globalAlpha = 0.34 + energy * 0.10;
+    ctx.drawImage(
+      img,
+      sx, sy, side, side,
+      minX, minY,
+      Math.max(1, maxX - minX),
+      Math.max(1, maxY - minY)
+    );
+
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = `hsla(${hue},92%,48%,0.30)`;
+    ctx.fillRect(
+      minX, minY,
+      Math.max(1, maxX - minX),
+      Math.max(1, maxY - minY)
+    );
+
+    const shade = ctx.createLinearGradient(0, minY, 0, maxY);
+    shade.addColorStop(0, "rgba(0,0,0,.02)");
+    shade.addColorStop(1, "rgba(0,0,0,.26)");
+    ctx.fillStyle = shade;
+    ctx.fillRect(
+      minX, minY,
+      Math.max(1, maxX - minX),
+      Math.max(1, maxY - minY)
+    );
+
+    ctx.restore();
+    return true;
+  }
+
+  function drawMotif(cxTile, cyTile, tileW, tileH, seed, hue, weak = false) {
+    const mode = Math.abs(seed) % 8;
+    const size = Math.max(3.5, Math.min(tileW, tileH) * 0.20);
+
+    ctx.save();
+    ctx.globalAlpha = weak ? 0.12 : 0.32 + energy * 0.18;
+    ctx.lineWidth = Math.max(0.7, size * 0.12);
+    ctx.strokeStyle = `hsla(${(hue + 115) % 360},100%,86%,.95)`;
+    ctx.fillStyle = `hsla(${(hue + 115) % 360},100%,86%,.90)`;
+
+    if (mode === 0) {
+      ctx.beginPath();
+      ctx.arc(cxTile, cyTile, size, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (mode === 1) {
+      ctx.beginPath();
+      ctx.moveTo(cxTile, cyTile - size);
+      ctx.lineTo(cxTile + size * 0.92, cyTile + size * 0.82);
+      ctx.lineTo(cxTile - size * 0.92, cyTile + size * 0.82);
+      ctx.closePath();
+      ctx.stroke();
+    } else if (mode === 2) {
+      ctx.beginPath();
+      ctx.moveTo(cxTile, cyTile - size);
+      ctx.lineTo(cxTile + size, cyTile);
+      ctx.lineTo(cxTile, cyTile + size);
+      ctx.lineTo(cxTile - size, cyTile);
+      ctx.closePath();
+      ctx.stroke();
+    } else if (mode === 3) {
+      ctx.strokeRect(
+        cxTile - size * 0.84,
+        cyTile - size * 0.84,
+        size * 1.68,
+        size * 1.68
+      );
+    } else if (mode === 4) {
+      const glyphs = ["✨", "🔥", "💎", "😀"];
+      ctx.font = `${Math.max(9, size * 1.55)}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(glyphs[Math.abs(seed) % glyphs.length], cxTile, cyTile);
+    } else {
+      ctx.beginPath();
+      ctx.arc(cxTile, cyTile, size * 0.42, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  for (let row = 0; row < rows; row += 1) {
+    const p0 = row / rows;
+    const p1 = (row + 1) / rows;
+
+    const y0 =
+      floorHorizonY +
+      Math.pow(p0, 1.78) * (floorBottom - floorHorizonY);
+    const y1 =
+      floorHorizonY +
+      Math.pow(p1, 1.78) * (floorBottom - floorHorizonY);
+
+    const half0 = 36 + Math.pow(p0, 1.14) * w * 0.60;
+    const half1 = 36 + Math.pow(p1, 1.14) * w * 0.60;
+
+    for (let col = 0; col < cols; col += 1) {
+      const u0 = col / cols;
+      const u1 = (col + 1) / cols;
+
+      const x00 = cx - half0 + half0 * 2 * u0;
+      const x01 = cx - half0 + half0 * 2 * u1;
+      const x10 = cx - half1 + half1 * 2 * u0;
+      const x11 = cx - half1 + half1 * 2 * u1;
+
+      const seed = row * 47 + col * 83 + beatStep * 29;
+      const hue = (seed * 17 + tunnelHue + bass * 64) % 360;
+      const light =
+        27 +
+        energy * 24 +
+        ((row + col + beatStep) % 3) * 4;
+
+      tilePath(x00, y0, x01, x11, y1, x10);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
+      ctx.fillStyle = `hsl(${hue},88%,${light}%)`;
+      ctx.fill();
+
+      const person = giftTileMap.get(`${row}:${col}`) || null;
+      if (person) {
+        drawPersonTile(person, x00, y0, x01, x11, y1, x10, hue);
+      }
+
+      tilePath(x00, y0, x01, x11, y1, x10);
+      ctx.strokeStyle = `rgba(255,255,255,${0.055 + energy * 0.075})`;
+      ctx.lineWidth = 0.55;
+      ctx.stroke();
+
+      const cxTile = (x00 + x01 + x10 + x11) * 0.25;
+      const cyTile = (y0 + y0 + y1 + y1) * 0.25;
+      const tileW = Math.abs((x01 - x00) + (x11 - x10)) * 0.5;
+      const tileH = Math.abs(y1 - y0);
+
+      drawMotif(
+        cxTile, cyTile, tileW, tileH,
+        seed, hue, Boolean(person)
+      );
+    }
+  }
+
+  const reflection = ctx.createLinearGradient(0, floorHorizonY, 0, h);
+  reflection.addColorStop(
+    0,
+    `hsla(${195 + tunnelHue * 0.08},100%,58%,${0.08 + energy * 0.04})`
+  );
+  reflection.addColorStop(0.22, "rgba(0,0,0,0)");
+  reflection.addColorStop(1, "rgba(0,0,0,.18)");
+  ctx.fillStyle = reflection;
+  ctx.fillRect(0, floorHorizonY, w, h - floorHorizonY);
+
+  ctx.restore();
+}
+
+
+
+
+
+
+
+
+const GIFT_WALL_LEVELS = 6;
+const GIFT_WALL_SLOTS_PER_LEVEL = 16;
+const GIFT_WALL_CAPACITY = GIFT_WALL_LEVELS * GIFT_WALL_SLOTS_PER_LEVEL;
+
+function clearTunnelWallOverlay() {
+  if (!tunnelWallCtx || !tunnelWallCanvas) return;
+  tunnelWallCtx.setTransform(1, 0, 0, 1, 0, 0);
+  tunnelWallCtx.clearRect(0, 0, TUNNEL_W, TUNNEL_H);
+}
+
+function syncGiftWall(items) {
+  const source = Array.isArray(items) ? items : [];
+  const next = source
+    .filter(item => item && Number.isFinite(Number(item.slot)))
+    .map(item => ({
+      id: String(item.id || ""),
+      slot: Math.max(
+        0,
+        Math.min(
+          GIFT_WALL_CAPACITY - 1,
+          Math.round(Number(item.slot || 0))
+        )
+      ),
+      username: String(item.username || ""),
+      displayName: String(item.display_name || item.username || ""),
+      profile: String(item.profile_image || item.avatar_url || ""),
+      giftName: String(item.gift_name || item.text || "presente"),
+      count: Math.max(1, Math.round(Number(item.count || 1))),
+      createdAt: Number(item.created_at || 0),
+    }));
+
+  const signature = next
+    .map(item => `${item.slot}:${item.id}:${item.profile}:${item.createdAt}`)
+    .join("|");
+
+  if (signature === giftWallSignature) return;
+
+  giftWallSignature = signature;
+  giftWall = next;
+
+  for (const item of giftWall) {
+    if (item.profile) preloadTunnelImage(item.profile);
+  }
+}
+
+function drawGiftWallOverlay(timeMs = performance.now()) {
+  if (!tunnelWallCtx || !tunnelWallCanvas) return;
+
+  const ctx = tunnelWallCtx;
+  const w = TUNNEL_W;
+  const h = TUNNEL_H;
+  const time = Number(timeMs || 0) * 0.001;
+  const epochNow = Date.now() * 0.001;
+  const energy = Math.max(0, Math.min(1, Number(musicEnergy || 0)));
+  const bass = Math.max(0, Math.min(1, Number(musicBass || 0)));
+
+  const previewGuides =
+    new URLSearchParams(window.location.search).get("preview") === "1";
+
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = 1;
+
+  // Mesmos parâmetros do piso da Catedral Orbital.
+  const cx = w * 0.5;
+  const floorHorizonY = h * 0.675;
+  const floorBottom = h * 1.035;
+  const floorRows = 11;
+  const floorCols = 7;
+
+  // Oito segmentos contínuos ao longo de cada lateral.
+  const wallRows = [9, 8, 7, 6, 5, 4, 3, 2];
+
+  const giftsBySlot = new Map();
+  for (const item of giftWall) {
+    giftsBySlot.set(Number(item.slot || 0), item);
+  }
+
+  function floorY(p) {
+    return (
+      floorHorizonY +
+      Math.pow(p, 1.78) * (floorBottom - floorHorizonY)
+    );
+  }
+
+  function floorHalfWidth(p) {
+    return 36 + Math.pow(p, 1.14) * w * 0.60;
+  }
+
+  function floorTileWidth(p) {
+    return (floorHalfWidth(p) * 2) / floorCols;
+  }
+
+  // Mais alto que a v3: aproxima visualmente o bloco de um quadrado.
+  function wallHeightAt(p) {
+    return Math.max(8, floorTileWidth(p) * 0.66);
+  }
+
+  // Inclinação lateral discreta. A base continua exatamente na borda do piso.
+  function wallLeanAt(p) {
+    return Math.max(1.2, floorTileWidth(p) * 0.085);
+  }
+
+  function floorEdgePoint(side, p) {
+    const half = floorHalfWidth(p);
+    return {
+      x: cx + (side === "left" ? -half : half),
+      y: floorY(p),
+    };
+  }
+
+  // Ponto de uma "linha horizontal" da parede.
+  // level=0 coincide com o piso.
+  // level=1 é o topo da primeira fileira, etc.
+  function wallBoundaryPoint(side, p, level) {
+    const base = floorEdgePoint(side, p);
+    const dir = side === "left" ? -1 : 1;
+
+    return {
+      x: base.x + dir * wallLeanAt(p) * level,
+      y: base.y - wallHeightAt(p) * level,
+    };
+  }
+
+  function wallQuad(side, localSlot, level) {
+    const row = wallRows[Math.max(0, Math.min(7, localSlot))];
+    const p0 = row / floorRows;
+    const p1 = (row + 1) / floorRows;
+
+    const lower0 = wallBoundaryPoint(side, p0, level);
+    const lower1 = wallBoundaryPoint(side, p1, level);
+    const upper1 = wallBoundaryPoint(side, p1, level + 1);
+    const upper0 = wallBoundaryPoint(side, p0, level + 1);
+
+    // Blocos adjacentes compartilham exatamente estes vértices.
+    return [lower0, lower1, upper1, upper0];
+  }
+
+  function pathQuad(points) {
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    ctx.lineTo(points[1].x, points[1].y);
+    ctx.lineTo(points[2].x, points[2].y);
+    ctx.lineTo(points[3].x, points[3].y);
+    ctx.closePath();
+  }
+
+  function lerpPoint(a, b, t) {
+    return {
+      x: a.x + (b.x - a.x) * t,
+      y: a.y + (b.y - a.y) * t,
+    };
+  }
+
+  function quadCenter(points) {
+    const bottom = lerpPoint(points[0], points[1], 0.5);
+    const top = lerpPoint(points[3], points[2], 0.5);
+    return lerpPoint(bottom, top, 0.5);
+  }
+
+  function scaledQuad(points, factor) {
+    const center = quadCenter(points);
+    return points.map(point => ({
+      x: center.x + (point.x - center.x) * factor,
+      y: center.y + (point.y - center.y) * factor,
+    }));
+  }
+
+  function distance(a, b) {
+    return Math.hypot(b.x - a.x, b.y - a.y);
+  }
+
+  function initialsFor(item) {
+    const label = String(
+      item.displayName || item.username || "?"
+    ).trim();
+
+    if (!label) return "?";
+
+    const parts = label.split(/\s+/).filter(Boolean);
+
+    if (parts.length >= 2) {
+      return (
+        String(parts[0][0] || "") +
+        String(parts[parts.length - 1][0] || "")
+      ).toUpperCase();
+    }
+
+    return label.slice(0, 2).toUpperCase();
+  }
+
+  function drawPreviewGuide(points, side, localSlot, level) {
+    pathQuad(points);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "rgb(6,9,15)";
+    ctx.fill();
+
+    pathQuad(points);
+    ctx.strokeStyle =
+      level === 0
+        ? "rgba(255,255,255,0.30)"
+        : "rgba(255,255,255,0.16)";
+    ctx.lineWidth = 0.75;
+    ctx.stroke();
+
+    // Para não poluir a prévia, texto apenas na fileira inferior.
+    if (level !== 0) return;
+
+    const center = quadCenter(points);
+
+    ctx.save();
+    ctx.font = "7px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "rgba(255,255,255,0.34)";
+    ctx.fillText(
+      `${side === "left" ? "E" : "D"}${localSlot + 1}`,
+      center.x,
+      center.y
+    );
+    ctx.restore();
+  }
+
+  function drawFallbackFace(points, item, hue) {
+    const center = quadCenter(points);
+    const leftHeight = distance(points[0], points[3]);
+    const rightHeight = distance(points[1], points[2]);
+    const fontSize = Math.max(
+      6,
+      Math.min(18, Math.min(leftHeight, rightHeight) * 0.38)
+    );
+
+    pathQuad(points);
+    ctx.fillStyle = `hsl(${hue},52%,28%)`;
+    ctx.fill();
+
+    ctx.save();
+    ctx.font = `700 ${fontSize}px sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.fillText(initialsFor(item), center.x, center.y);
+    ctx.restore();
+  }
+
+  // COVER + perspectiva aproximada por tiras verticais.
+  // A foto é primeiro recortada como "cover" e depois projetada sobre o quad.
+  function drawImageCoverPerspective(img, points, alpha) {
+    const iw = img.naturalWidth || img.width;
+    const ih = img.naturalHeight || img.height;
+    if (!iw || !ih) return false;
+
+    const topLeft = points[3];
+    const topRight = points[2];
+    const bottomRight = points[1];
+    const bottomLeft = points[0];
+
+    const avgWidth =
+      (distance(topLeft, topRight) + distance(bottomLeft, bottomRight)) * 0.5;
+
+    const avgHeight =
+      (distance(topLeft, bottomLeft) + distance(topRight, bottomRight)) * 0.5;
+
+    if (avgWidth < 1 || avgHeight < 1) return false;
+
+    const destAspect = avgWidth / avgHeight;
+    const srcAspect = iw / ih;
+
+    let sx = 0;
+    let sy = 0;
+    let sw = iw;
+    let sh = ih;
+
+    // CSS background-size: cover equivalente.
+    if (srcAspect > destAspect) {
+      sw = ih * destAspect;
+      sx = (iw - sw) * 0.5;
+    } else {
+      sh = iw / destAspect;
+      sy = (ih - sh) * 0.5;
+    }
+
+    const strips = 28;
+
+    ctx.save();
+    pathQuad(points);
+    ctx.clip();
+    ctx.globalAlpha = alpha;
+
+    for (let i = 0; i < strips; i += 1) {
+      const u0 = i / strips;
+      const u1 = (i + 1) / strips;
+
+      const tl = lerpPoint(topLeft, topRight, u0);
+      const tr = lerpPoint(topLeft, topRight, u1);
+      const bl = lerpPoint(bottomLeft, bottomRight, u0);
+      const br = lerpPoint(bottomLeft, bottomRight, u1);
+
+      const sourceX0 = sx + sw * u0;
+      const sourceX1 = sx + sw * u1;
+      const sourceW = Math.max(0.5, sourceX1 - sourceX0);
+
+      // A tira estreita é tratada como um paralelogramo.
+      // Com 28 tiras, a diferença para o quad projetivo fica visualmente suave.
+      const a = (tr.x - tl.x) / sourceW;
+      const b = (tr.y - tl.y) / sourceW;
+      const c = (bl.x - tl.x) / sh;
+      const d = (bl.y - tl.y) / sh;
+
+      ctx.save();
+      ctx.setTransform(a, b, c, d, tl.x, tl.y);
+
+      // Pequena sobreposição evita micro-fendas entre tiras.
+      ctx.drawImage(
+        img,
+        sourceX0,
+        sy,
+        sourceW + 0.7,
+        sh,
+        0,
+        0,
+        sourceW + 0.7,
+        sh
+      );
+
+      ctx.restore();
+    }
+
+    ctx.restore();
+    return true;
+  }
+
+  function drawOccupiedBlock(points, item, slot, flash) {
+    const hue =
+      (
+        tunnelHue +
+        slot * 19 +
+        time * (2.0 + energy * 1.5) +
+        bass * 34
+      ) % 360;
+
+    // Base do bloco sempre opaca.
+    pathQuad(points);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = `hsl(${hue},68%,${19 + energy * 12}%)`;
+    ctx.fill();
+
+    const entry = item.profile ? tunnelImageEntry(item.profile) : null;
+    let drewPhoto = false;
+
+    if (entry) {
+      drewPhoto = drawImageCoverPerspective(
+        entry.img,
+        points,
+        0.86
+      );
+    }
+
+    if (!drewPhoto) {
+      drawFallbackFace(points, item, hue);
+    }
+
+    // Tinta leve por cima mantém integração com a música,
+    // sem reduzir a opacidade da parede.
+    ctx.save();
+    pathQuad(points);
+    ctx.clip();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle =
+      `hsla(${hue},92%,50%,${0.10 + energy * 0.06})`;
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+
+    // Moldura compartilhada entre os blocos.
+    pathQuad(points);
+    ctx.strokeStyle =
+      `hsla(${(hue + 35) % 360},100%,78%,${0.48 + energy * 0.19 + flash * 0.20})`;
+    ctx.lineWidth = 0.9 + energy * 0.8 + flash * 1.1;
+    ctx.stroke();
+
+    if (item.count > 1) {
+      const center = quadCenter(points);
+
+      ctx.save();
+      ctx.font = "6px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      ctx.fillStyle = "rgba(255,255,255,0.88)";
+      ctx.fillText(`×${item.count}`, center.x, points[1].y - 2);
+      ctx.restore();
+    }
+
+    if (flash > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      pathQuad(points);
+      ctx.strokeStyle = `rgba(255,255,255,${flash * 0.40})`;
+      ctx.lineWidth = 1.1 + flash * 1.6;
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  for (let slot = 0; slot < GIFT_WALL_CAPACITY; slot += 1) {
+    const level = Math.floor(slot / GIFT_WALL_SLOTS_PER_LEVEL);
+    const withinLevel = slot % GIFT_WALL_SLOTS_PER_LEVEL;
+    const side = withinLevel < 8 ? "left" : "right";
+    const localSlot = withinLevel < 8 ? withinLevel : withinLevel - 8;
+
+    const item = giftsBySlot.get(slot) || null;
+    let points = wallQuad(side, localSlot, level);
+
+    if (!item) {
+      if (previewGuides) {
+        drawPreviewGuide(points, side, localSlot, level);
+      }
+      continue;
+    }
+
+    const age =
+      item.createdAt > 0
+        ? Math.max(0, epochNow - item.createdAt)
+        : 999;
+
+    const appear = Math.max(0.10, Math.min(1, age / 0.55));
+    const eased = 1 - Math.pow(1 - appear, 3);
+    points = scaledQuad(points, 0.92 + eased * 0.08);
+
+    const flash = age < 1.0 ? 1 - age / 1.0 : 0;
+
+    drawOccupiedBlock(points, item, slot, flash);
+  }
+
+  ctx.restore();
+}
+
+
+function drawOrbitalCathedral(timeMs = performance.now()) {
+  if (!tunnelCtx || !tunnelCanvas) return;
+
+  const ctx = tunnelCtx;
+  const w = TUNNEL_W;
+  const h = TUNNEL_H;
+  const time = Number(timeMs || 0) * 0.001;
+  const energy = Math.max(0, Math.min(1, Number(musicEnergy || 0)));
+  const bass = Math.max(0, Math.min(1, Number(musicBass || 0)));
+
+  // O ponto de fuga do túnel coincide com o fim/horizonte do piso.
+  const floorHorizonY = h * 0.675;
+  const cx = w * 0.5;
+  const cy = floorHorizonY;
+
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+  // ============================================================
+  // 1. FUNDO PLASMA ANIMADO, PUXADO PARA O PRETO.
+  // ============================================================
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = "#010105";
+  ctx.fillRect(0, 0, w, h);
+
+  const plasmaSpots = [
+    { ax: 0.23, ay: 0.18, rx: 0.34, ry: 0.26, phase: 0.0, hue: 286 },
+    { ax: 0.78, ay: 0.24, rx: 0.30, ry: 0.23, phase: 1.7, hue: 188 },
+    { ax: 0.18, ay: 0.52, rx: 0.38, ry: 0.30, phase: 3.1, hue: 330 },
+    { ax: 0.80, ay: 0.56, rx: 0.35, ry: 0.28, phase: 4.4, hue: 155 },
+    { ax: 0.50, ay: 0.40, rx: 0.42, ry: 0.34, phase: 5.6, hue: 225 },
+  ];
+
+  ctx.globalCompositeOperation = "lighter";
+  for (let i = 0; i < plasmaSpots.length; i += 1) {
+    const spot = plasmaSpots[i];
+    const slow = time * (0.055 + i * 0.006);
+    const px = w * (
+      spot.ax +
+      Math.sin(slow + spot.phase) * (0.07 + energy * 0.025)
+    );
+    const py = h * (
+      spot.ay +
+      Math.cos(slow * 0.83 + spot.phase) * (0.055 + bass * 0.020)
+    );
+    const radius = Math.max(w * spot.rx, h * spot.ry);
+    const hue = (
+      spot.hue +
+      tunnelHue * 0.16 +
+      Math.sin(time * 0.10 + spot.phase) * 28
+    ) % 360;
+
+    const plasma = ctx.createRadialGradient(px, py, 0, px, py, radius);
+    plasma.addColorStop(
+      0,
+      `hsla(${hue},100%,58%,${0.10 + energy * 0.10})`
+    );
+    plasma.addColorStop(
+      0.28,
+      `hsla(${hue + 28},100%,44%,${0.075 + energy * 0.075})`
+    );
+    plasma.addColorStop(
+      0.62,
+      `hsla(${hue + 62},92%,28%,${0.026 + energy * 0.040})`
+    );
+    plasma.addColorStop(1, "rgba(0,0,0,0)");
+
+    ctx.fillStyle = plasma;
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  // Faixas orgânicas suaves para dar aparência de plasma esticado.
+  for (let band = 0; band < 7; band += 1) {
+    const phase = time * (0.035 + band * 0.002) + band * 0.93;
+    const x = cx + Math.sin(phase) * w * (0.20 + band * 0.016);
+    const y = h * (0.12 + band * 0.085) + Math.cos(phase * 0.78) * 22;
+    const rx = w * (0.28 + band * 0.015);
+    const ry = 34 + band * 7 + energy * 18;
+    const hue = (190 + band * 31 + tunnelHue * 0.10) % 360;
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(Math.sin(phase * 0.43) * 0.28);
+    const streak = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
+    streak.addColorStop(
+      0,
+      `hsla(${hue},100%,62%,${0.030 + energy * 0.042})`
+    );
+    streak.addColorStop(0.46, `hsla(${hue + 34},100%,42%,0.018)`);
+    streak.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.scale(1, ry / rx);
+    ctx.fillStyle = streak;
+    ctx.beginPath();
+    ctx.arc(0, 0, rx, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Preto nas bordas: o plasma sempre "morre" no escuro.
+  ctx.globalCompositeOperation = "source-over";
+  const plasmaVignette = ctx.createRadialGradient(
+    cx, h * 0.42, h * 0.12,
+    cx, h * 0.42, h * 0.76
+  );
+  plasmaVignette.addColorStop(0, "rgba(0,0,0,0)");
+  plasmaVignette.addColorStop(0.55, "rgba(0,0,0,.04)");
+  plasmaVignette.addColorStop(0.82, "rgba(0,0,0,.30)");
+  plasmaVignette.addColorStop(1, "rgba(0,0,0,.72)");
+  ctx.fillStyle = plasmaVignette;
+  ctx.fillRect(0, 0, w, h);
+
+  // ============================================================
+  // 2. TÚNEL / ANÉIS: CENTRO NO FIM DO PISO.
+  // ============================================================
+  ctx.globalCompositeOperation = "lighter";
+
+  const ringCount = 13;
+  const ringSegments = 28;
+  const ringFlow = time * (15 + energy * 22);
+  const ringDrift = time * (0.009 + energy * 0.007);
+  const pulse =
+    1 +
+    Math.sin(time * (0.82 + bass * 1.05)) *
+      (0.014 + bass * 0.050);
+
+  for (let ring = 0; ring < ringCount; ring += 1) {
+    const depth = (ring / ringCount + ringDrift) % 1;
+    const radius = (13 + depth * h * 0.60) * pulse;
+    const ry = radius * (0.72 + depth * 0.23);
+    const alpha =
+      0.18 + (1 - depth) * (0.34 + energy * 0.25);
+    const width =
+      2.4 +
+      energy * 3.8 +
+      bass * 2.0 +
+      (1 - depth) * 1.9;
+
+    for (let seg = 0; seg < ringSegments; seg += 1) {
+      const a0 = (seg / ringSegments) * Math.PI * 2;
+      const a1 = ((seg + 0.91) / ringSegments) * Math.PI * 2;
+      const hue = (
+        ringFlow * 36 +
+        seg * (360 / ringSegments) +
+        ring * 20 +
+        tunnelHue * 0.16
+      ) % 360;
+
+      ctx.strokeStyle = `hsla(${hue},100%,67%,${alpha})`;
+      ctx.lineWidth = width;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, radius, ry, 0, a0, a1);
+      ctx.stroke();
+
+      ctx.strokeStyle =
+        `rgba(255,255,255,${alpha * (0.14 + energy * 0.19)})`;
+      ctx.lineWidth = Math.max(0.9, width * 0.17);
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, radius, ry, 0, a0, a1);
+      ctx.stroke();
+    }
+  }
+
+  // Halo do ponto de fuga.
+  const vanishingHalo = ctx.createRadialGradient(
+    cx, cy, 0,
+    cx, cy, 62 + bass * 20
+  );
+  vanishingHalo.addColorStop(
+    0,
+    `rgba(255,255,255,${0.13 + bass * 0.12})`
+  );
+  vanishingHalo.addColorStop(
+    0.22,
+    `hsla(${195 + tunnelHue * 0.08},100%,64%,${0.16 + energy * 0.12})`
+  );
+  vanishingHalo.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = vanishingHalo;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 76 + bass * 18, 0, Math.PI * 2);
+  ctx.fill();
+
+  // ============================================================
+  // 3. TRILHOS / FOTOS: DESENHADOS ANTES DO PISO.
+  //    A PARTE BAIXA SERÁ COBERTA PELOS TIJOLOS.
+  // ============================================================
+    // Trilhos e fotos existem somente ACIMA do horizonte do piso.
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, w, floorHorizonY - 2);
+  ctx.clip();
+
+const laneCount = 24;
+  const laneRotation = time * (0.055 + energy * 0.032);
+  const outerRx = w * 0.84;
+  const outerRy = h * 0.78;
+  const innerRadius = 13 + bass * 6;
+  const laneGeometry = [];
+
+  for (let i = 0; i < laneCount; i += 1) {
+    const baseAngle =
+      (i / laneCount) * Math.PI * 2 + laneRotation;
+
+    const outerX = cx + Math.cos(baseAngle) * outerRx;
+    const outerY = cy + Math.sin(baseAngle) * outerRy;
+
+    const innerAngle =
+      baseAngle +
+      0.31 +
+      Math.sin(time * 0.44 + i) * 0.035;
+
+    const innerX = cx + Math.cos(innerAngle) * innerRadius;
+    const innerY = cy + Math.sin(innerAngle) * innerRadius * 0.72;
+
+    const ctrlAngle = baseAngle + 0.15;
+    const ctrlX =
+      cx + Math.cos(ctrlAngle) * outerRx * 0.46;
+    const ctrlY =
+      cy + Math.sin(ctrlAngle) * outerRy * 0.39;
+
+    laneGeometry.push({
+      outerX, outerY, ctrlX, ctrlY, innerX, innerY,
+    });
+
+    const hue = (ringFlow * 42 + i * 17 + 120) % 360;
+
+    ctx.strokeStyle =
+      `hsla(${hue},100%,58%,${0.075 + energy * 0.14})`;
+    ctx.lineWidth = 5.0 + energy * 3.4;
+    ctx.beginPath();
+    ctx.moveTo(outerX, outerY);
+    ctx.quadraticCurveTo(ctrlX, ctrlY, innerX, innerY);
+    ctx.stroke();
+
+    ctx.strokeStyle =
+      `hsla(${hue + 22},100%,76%,${0.18 + energy * 0.25})`;
+    ctx.lineWidth = 2.0 + energy * 2.2;
+    ctx.beginPath();
+    ctx.moveTo(outerX, outerY);
+    ctx.quadraticCurveTo(ctrlX, ctrlY, innerX, innerY);
+    ctx.stroke();
+
+    const travel =
+      (time * (0.085 + energy * 0.060) + i * 0.061) % 1;
+    const eased = travel * travel;
+    const omt = 1 - eased;
+
+    const sparkX =
+      omt * omt * outerX +
+      2 * omt * eased * ctrlX +
+      eased * eased * innerX;
+
+    const sparkY =
+      omt * omt * outerY +
+      2 * omt * eased * ctrlY +
+      eased * eased * innerY;
+
+    ctx.fillStyle =
+      `hsla(${hue + 34},100%,80%,${0.32 + energy * 0.32})`;
+    ctx.beginPath();
+    ctx.arc(sparkX, sparkY, 2.2 + bass * 2.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const people = Array.isArray(tunnelPeople) ? tunnelPeople : [];
+  const peopleCount = Math.min(10, people.length);
+
+  for (let i = 0; i < peopleCount; i += 1) {
+    const person = people[i];
+    const lane = laneGeometry[(i * 3 + 1) % laneGeometry.length];
+
+    const travel =
+      (time * (0.035 + (i % 3) * 0.005) +
+        i / Math.max(1, peopleCount)) % 1;
+
+    const eased = travel * travel;
+    const omt = 1 - eased;
+
+    const px =
+      omt * omt * lane.outerX +
+      2 * omt * eased * lane.ctrlX +
+      eased * eased * lane.innerX;
+
+    const py =
+      omt * omt * lane.outerY +
+      2 * omt * eased * lane.ctrlY +
+      eased * eased * lane.innerY;
+
+    const perspective = 1 - travel;
+    const radius =
+      6.2 +
+      perspective * 10.2 +
+      (person?.weight > 1 ? 2.2 : 0);
+
+    const alpha = Math.max(
+      0.20,
+      Math.min(0.90, 0.27 + perspective * 0.59)
+    );
+
+    const hue =
+      (ringFlow * 46 + i * 49 + 155) % 360;
+
+    if (!drawTunnelProfile(
+      ctx, person, px, py, radius, hue, alpha
+    )) {
+      ctx.fillStyle = `hsla(${hue},100%,77%,${alpha})`;
+      ctx.beginPath();
+      ctx.arc(px, py, Math.max(2, radius * 0.34), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // ============================================================
+  // 4. PISO OPACO POR CIMA DOS TRILHOS.
+  //    O HORIZONTE COINCIDE COM O CENTRO DA ESPIRAL.
+  // ============================================================
+    ctx.restore();
+
+ctx.globalCompositeOperation = "source-over";
+
+  const floorBottom = h * 1.035;
+  const rows = 11;
+  const cols = 7;
+  const beatStep = Math.floor(time * (0.45 + bass * 1.35));
+
+  function drawTileMotif(
+    cxTile, cyTile, tileW, tileH, seed, hueBase, alphaBase
+  ) {
+    const mode = seed % 8;
+    const size = Math.max(
+      3.5,
+      Math.min(tileW, tileH) * 0.20
+    );
+    const hue2 = (hueBase + 115) % 360;
+
+    ctx.save();
+    ctx.globalAlpha = alphaBase;
+    ctx.lineWidth = Math.max(0.7, size * 0.12);
+    ctx.strokeStyle = `hsla(${hue2},100%,86%,.95)`;
+    ctx.fillStyle = `hsla(${hue2},100%,86%,.90)`;
+
+    if (mode === 0) {
+      ctx.beginPath();
+      ctx.arc(cxTile, cyTile, size, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(cxTile, cyTile, size * 0.40, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (mode === 1) {
+      ctx.beginPath();
+      ctx.moveTo(cxTile, cyTile - size);
+      ctx.lineTo(cxTile + size * 0.92, cyTile + size * 0.82);
+      ctx.lineTo(cxTile - size * 0.92, cyTile + size * 0.82);
+      ctx.closePath();
+      ctx.stroke();
+    } else if (mode === 2) {
+      ctx.beginPath();
+      ctx.moveTo(cxTile, cyTile - size);
+      ctx.lineTo(cxTile + size, cyTile);
+      ctx.lineTo(cxTile, cyTile + size);
+      ctx.lineTo(cxTile - size, cyTile);
+      ctx.closePath();
+      ctx.stroke();
+    } else if (mode === 3) {
+      ctx.strokeRect(
+        cxTile - size * 0.84,
+        cyTile - size * 0.84,
+        size * 1.68,
+        size * 1.68
+      );
+    } else if (mode === 4) {
+      ctx.font = `${Math.max(9, size * 1.55)}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const glyphs = ["✨", "🔥", "💎", "😀"];
+      ctx.fillText(
+        glyphs[Math.abs(seed) % glyphs.length],
+        cxTile,
+        cyTile
+      );
+    } else if (mode === 5) {
+      ctx.beginPath();
+      ctx.arc(
+        cxTile - size * 0.45, cyTile, size * 0.36,
+        0, Math.PI * 2
+      );
+      ctx.arc(
+        cxTile + size * 0.45, cyTile, size * 0.36,
+        0, Math.PI * 2
+      );
+      ctx.fill();
+    } else if (mode === 6) {
+      ctx.beginPath();
+      for (let p = 0; p < 5; p += 1) {
+        const a = -Math.PI / 2 + p * Math.PI * 2 / 5;
+        const sx = cxTile + Math.cos(a) * size;
+        const sy = cyTile + Math.sin(a) * size;
+        if (p === 0) ctx.moveTo(sx, sy);
+        else ctx.lineTo(sx, sy);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(cxTile - size, cyTile);
+      ctx.lineTo(cxTile, cyTile - size);
+      ctx.lineTo(cxTile + size, cyTile);
+      ctx.lineTo(cxTile, cyTile + size);
+      ctx.closePath();
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(cxTile, cyTile, size * 0.17, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  // Camada-base escura do piso garante que os trilhos não atravessem visualmente.
+  const floorBase = ctx.createLinearGradient(
+    0, floorHorizonY, 0, h
+  );
+  floorBase.addColorStop(0, "#03060e");
+  floorBase.addColorStop(0.18, "#02040a");
+  floorBase.addColorStop(1, "#000003");
+  ctx.fillStyle = floorBase;
+
+  ctx.beginPath();
+  ctx.moveTo(cx - 24, floorHorizonY);
+  ctx.lineTo(cx + 24, floorHorizonY);
+  ctx.lineTo(w * 1.08, floorBottom);
+  ctx.lineTo(w * -0.08, floorBottom);
+  ctx.closePath();
+  ctx.fill();
+
+  for (let row = 0; row < rows; row += 1) {
+    const p0 = row / rows;
+    const p1 = (row + 1) / rows;
+
+    const y0 =
+      floorHorizonY +
+      Math.pow(p0, 1.78) * (floorBottom - floorHorizonY);
+
+    const y1 =
+      floorHorizonY +
+      Math.pow(p1, 1.78) * (floorBottom - floorHorizonY);
+
+    const half0 = 24 + Math.pow(p0, 1.16) * w * 0.60;
+    const half1 = 24 + Math.pow(p1, 1.16) * w * 0.60;
+
+    for (let col = 0; col < cols; col += 1) {
+      const u0 = col / cols;
+      const u1 = (col + 1) / cols;
+
+      const x00 = cx - half0 + half0 * 2 * u0;
+      const x01 = cx - half0 + half0 * 2 * u1;
+      const x10 = cx - half1 + half1 * 2 * u0;
+      const x11 = cx - half1 + half1 * 2 * u1;
+
+      const seed = row * 47 + col * 83 + beatStep * 29;
+      const hue =
+        (seed * 17 + tunnelHue + bass * 64) % 360;
+
+      const light =
+        27 +
+        energy * 24 +
+        ((row + col + beatStep) % 3) * 4;
+
+      // Mais opaco para realmente ficar por cima dos trilhos.
+      const alpha =
+        0.68 + energy * 0.18 + p1 * 0.08;
+
+      ctx.fillStyle =
+        `hsla(${hue},88%,${light}%,${Math.min(.96, alpha)})`;
+
+      ctx.beginPath();
+      ctx.moveTo(x00 + 0.65, y0 + 0.6);
+      ctx.lineTo(x01 - 0.65, y0 + 0.6);
+      ctx.lineTo(x11 - 1.0, y1 - 0.65);
+      ctx.lineTo(x10 + 1.0, y1 - 0.65);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle =
+        `rgba(255,255,255,${0.055 + energy * 0.075})`;
+      ctx.lineWidth = 0.55;
+      ctx.stroke();
+
+      const cxTile = (x00 + x01 + x10 + x11) * 0.25;
+      const cyTile = (y0 + y0 + y1 + y1) * 0.25;
+      const tileW =
+        Math.abs((x01 - x00) + (x11 - x10)) * 0.5;
+      const tileH = Math.abs(y1 - y0);
+
+      drawTileMotif(
+        cxTile, cyTile, tileW, tileH,
+        seed, hue, 0.36 + energy * 0.22
+      );
+    }
+  }
+
+  // Reflexo leve do plasma no piso.
+  const reflection = ctx.createLinearGradient(
+    0, floorHorizonY, 0, h
+  );
+  reflection.addColorStop(
+    0,
+    `hsla(${195 + tunnelHue * 0.08},100%,58%,${0.10 + energy * 0.05})`
+  );
+  reflection.addColorStop(0.20, "rgba(0,0,0,0)");
+  reflection.addColorStop(0.72, "rgba(0,0,0,0)");
+  reflection.addColorStop(1, "rgba(0,0,0,.20)");
+  ctx.fillStyle = reflection;
+  ctx.fillRect(0, floorHorizonY, w, h - floorHorizonY);
+
+  // Vinheta final.
+  const finalVignette = ctx.createRadialGradient(
+    cx, h * 0.45, h * 0.10,
+    cx, h * 0.45, h * 0.76
+  );
+  finalVignette.addColorStop(0, "rgba(0,0,0,0)");
+  finalVignette.addColorStop(0.58, "rgba(0,0,0,.02)");
+  finalVignette.addColorStop(0.86, "rgba(0,0,0,.12)");
+  finalVignette.addColorStop(1, "rgba(0,0,0,.38)");
+  ctx.fillStyle = finalVignette;
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.restore();
+}
+
 
 function drawTunnel(now) {
   if (!tunnelCtx) return;
+
+  const time = now * 0.001;
+
+  updateMusicVolume();
+  updateMusicEnergy(time);
+  tunnelHue = (tunnelHue + 0.18 + musicEnergy * 1.6) % 360;
+
   if (!isTunnelMode()) {
     requestAnimationFrame(drawTunnel);
     return;
   }
+
+  if (tunnelStyle === "orbital_cathedral") {
+    drawOrbitalCathedral(now);
+    drawOrbitalFloorOverlay(now);
+    drawGiftWallOverlay(now);
+    requestAnimationFrame(drawTunnel);
+    return;
+  }
+
+  clearTunnelFloorOverlay();
+  clearTunnelWallOverlay();
   const ctx = tunnelCtx;
-  const time = now * 0.001;
-  updateMusicVolume();
-  updateMusicEnergy(time);
-  tunnelHue = (tunnelHue + 0.18 + musicEnergy * 1.6) % 360;
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = "#02030a";
@@ -1338,6 +2706,77 @@ function waitVideoReady(video, timeoutMs = 1800) {
   });
 }
 
+function waitForPresentedVideoFrame(video, timeoutMs = 1800) {
+  return new Promise(resolve => {
+    if (!video) {
+      resolve(false);
+      return;
+    }
+    let finished = false;
+    let timeout = 0;
+    const done = (ok) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+      resolve(Boolean(ok));
+    };
+    timeout = window.setTimeout(() => done(false), timeoutMs);
+
+    if (typeof video.requestVideoFrameCallback === "function") {
+      try {
+        video.requestVideoFrameCallback(() => done(true));
+        return;
+      } catch (err) {
+        console.warn("requestVideoFrameCallback failed", err);
+      }
+    }
+
+    const onTimeUpdate = () => {
+      video.removeEventListener("timeupdate", onTimeUpdate);
+      done(true);
+    };
+    video.addEventListener("timeupdate", onTimeUpdate, { once: true });
+    window.setTimeout(() => {
+      if (video.readyState >= 2 && !video.paused) done(true);
+    }, 120);
+  });
+}
+
+function armPresentedFrameTracker(video, token) {
+  if (!video || typeof video.requestVideoFrameCallback !== "function") return;
+  const localToken = ++videoFrameCallbackToken;
+
+  const watch = () => {
+    if (
+      localToken !== videoFrameCallbackToken ||
+      token !== activeSpeechToken ||
+      !speechBusy ||
+      video !== activeVideo
+    ) return;
+
+    try {
+      video.requestVideoFrameCallback(() => {
+        if (
+          localToken !== videoFrameCallbackToken ||
+          token !== activeSpeechToken ||
+          !speechBusy ||
+          video !== activeVideo
+        ) return;
+
+        videoWatchdogState.lastPresentedFrameAt = performance.now();
+        videoWatchdogState.presentedFrames += 1;
+        videoWatchdogState.src = video.currentSrc || video.src || "";
+        videoWatchdogState.time = Number(video.currentTime || 0);
+        watch();
+      });
+    } catch (err) {
+      console.warn("video frame tracker failed", err);
+    }
+  };
+
+  watch();
+}
+
 async function switchVideo(path, options = {}) {
   if (!path) return false;
   const force = Boolean(options.force);
@@ -1382,6 +2821,12 @@ async function switchVideo(path, options = {}) {
     return false;
   }
   await standbyVideo.play().catch(() => {});
+  if (token !== videoSwitchToken) return false;
+
+  const presented = await waitForPresentedVideoFrame(standbyVideo, 1800);
+  if (!presented) {
+    console.warn("video first presented frame timeout", path);
+  }
   if (token !== videoSwitchToken) return false;
 
   standbyVideo.classList.add("active");
@@ -1477,11 +2922,17 @@ async function pollState() {
     bellyProfileOffsetX = clampNumber(payload.state?.belly_profile_offset_x, -120, 120, 0);
     bellyProfileOffsetY = clampNumber(payload.state?.belly_profile_offset_y, -120, 120, 0);
     normalizeLiveCameraConfig(payload.state || {});
+    tunnelStyle = String(payload.state?.tunnel_style || "classic");
     visualMode = String(payload.state?.visual_mode || "tunnel") === "map" ? "map" : "tunnel";
     stage.dataset.visual = visualMode;
     stage.dataset.mode = String(urlMode || payload.state?.mode || "normal");
     syncMusicTracks(payload.music || []);
     syncTunnelPeople(payload.visual_people || []);
+    syncGiftWall(payload.gift_wall || []);
+    syncSuperCube(
+      payload.top_gifter || null,
+      String(payload.state?.tunnel_style || "classic")
+    );
     if (isTunnelMode()) {
       currentMap = payload.map || currentMap || {};
       clearMapForTunnel();
@@ -1962,18 +3413,34 @@ async function recoverTalkingVideo(token, reason = "stall") {
 
 function startVideoWatchdog(token) {
   stopVideoWatchdog();
+
+  const now = performance.now();
   videoWatchdogState = {
     src: activeVideo?.currentSrc || activeVideo?.src || "",
     time: Number(activeVideo?.currentTime || 0),
-    wallAt: performance.now(),
+    wallAt: now,
+    lastPresentedFrameAt: now,
+    presentedFrames: 0,
+    callbackVideo: activeVideo || null,
   };
+
+  armPresentedFrameTracker(activeVideo, token);
+
   const tick = () => {
     if (token !== activeSpeechToken || !speechBusy) {
       videoWatchdogFrame = 0;
       return;
     }
+
     const video = activeVideo;
     if (video && currentScene === "talking") {
+      if (videoWatchdogState.callbackVideo !== video) {
+        videoWatchdogState.callbackVideo = video;
+        videoWatchdogState.lastPresentedFrameAt = performance.now();
+        videoWatchdogState.presentedFrames = 0;
+        armPresentedFrameTracker(video, token);
+      }
+
       if (video.ended && video.loop !== false) {
         try {
           video.currentTime = 0;
@@ -1981,32 +3448,47 @@ function startVideoWatchdog(token) {
           console.warn("speech video rewind failed", err);
         }
         video.play().catch(() => {});
+        videoWatchdogState.lastPresentedFrameAt = performance.now();
       } else if (video.paused) {
         video.play().catch(() => {});
       }
-      const src = video.currentSrc || video.src || "";
-      const time = Number(video.currentTime || 0);
-      const minProgress = Math.max(0.012, 0.018 * Math.max(0.4, Number(video.playbackRate || 1)));
-      if (src !== videoWatchdogState.src || Math.abs(time - videoWatchdogState.time) >= minProgress) {
-        videoWatchdogState = { src, time, wallAt: performance.now() };
-      } else if (performance.now() - videoWatchdogState.wallAt > STALLED_VIDEO_SWITCH_MS) {
-        recoverTalkingVideo(token, "stalled-frame").catch(console.warn);
-        videoWatchdogState = { src, time: Number(video.currentTime || 0), wallAt: performance.now() };
-      } else if (performance.now() - videoWatchdogState.wallAt > STALLED_VIDEO_NUDGE_MS) {
-        console.warn("speech video watchdog recovered stalled frame");
-        if (Number.isFinite(video.duration) && video.duration > 0) {
-          video.currentTime = Math.min(Math.max(0, time + 0.12), Math.max(0, video.duration - 0.05));
-        }
+
+      const playbackRate = Number(video.playbackRate || 1);
+
+      if (playbackRate < 0.9) {
+        videoWatchdogState.lastPresentedFrameAt = performance.now();
+        videoWatchdogState.src = video.currentSrc || video.src || "";
+        videoWatchdogState.time = Number(video.currentTime || 0);
+        videoWatchdogFrame = requestAnimationFrame(tick);
+        return;
+      }
+
+      const lastFrameAt = Number(videoWatchdogState.lastPresentedFrameAt || 0);
+      const stalledFor = lastFrameAt > 0 ? performance.now() - lastFrameAt : 0;
+
+      if (stalledFor > STALLED_VIDEO_RELOAD_MS) {
+        console.error("speech video stalled for too long; reloading renderer");
+        window.location.reload();
+        return;
+      }
+
+      if (stalledFor > STALLED_VIDEO_SWITCH_MS) {
+        recoverTalkingVideo(token, "no-presented-frame").catch(console.warn);
+        videoWatchdogState.lastPresentedFrameAt = performance.now();
+      } else if (stalledFor > STALLED_VIDEO_PLAY_RETRY_MS) {
+        console.warn("speech video watchdog retrying play()");
         video.play().catch(() => {});
-        videoWatchdogState = { src, time: Number(video.currentTime || 0), wallAt: performance.now() };
       }
     }
+
     videoWatchdogFrame = requestAnimationFrame(tick);
   };
+
   videoWatchdogFrame = requestAnimationFrame(tick);
 }
 
 function stopVideoWatchdog() {
+  videoFrameCallbackToken += 1;
   if (videoWatchdogFrame) {
     cancelAnimationFrame(videoWatchdogFrame);
     videoWatchdogFrame = 0;
@@ -2165,7 +3647,10 @@ async function playSpeechJob(job) {
   sceneAudio.removeAttribute("src");
   sceneAudio.load();
 
-  await setScene("talking", { force: true, startAt: 0 });
+  const talkingReady = await setScene("talking", { force: true, startAt: 0 });
+  if (!talkingReady) {
+    console.warn("talking scene not ready before speech audio");
+  }
 
   if (!audioPath) {
     window.setTimeout(() => finishSpeechVisual(token, job), fallbackMs);

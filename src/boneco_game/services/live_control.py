@@ -8,7 +8,7 @@ from boneco_game.core.settings import DEFAULT_HOST, DEFAULT_PORT, LIVE_CONTROL_C
 from boneco_game.services.audio_routing import ensure_live_audio_sink, player_sink_for_audio_source
 from boneco_game.services.credentials import StreamlabsCredentialProvider, end_streamlabs_live_if_saved
 from boneco_game.services.renderer_window import restart_renderer_window, status as renderer_window_status
-from boneco_game.services.runtime_state import update_state
+from boneco_game.services.runtime_state import read_state, update_state
 from boneco_game.services.live_events import reset_event_state
 from boneco_game.services.speech_queue import push_ready, reset_speech_queues
 from boneco_game.services.text_ai import generate_live_opening
@@ -18,6 +18,16 @@ from boneco_game.services.transmission import start_transmission, status as tran
 
 
 STATUS_FILE = RUNS_DIR / "live_control_status.json"
+
+TUNNEL_STYLES = ("classic", "orbital_cathedral")
+
+def _next_tunnel_style() -> str:
+    current = str(read_state().get("tunnel_style") or "classic")
+    available = [style for style in TUNNEL_STYLES if style != current]
+    if not available:
+        return TUNNEL_STYLES[0]
+    return available[int(time.time()) % len(available)]
+
 _LAST_MONITOR_RECOVERY = 0.0
 
 
@@ -105,6 +115,7 @@ def start_live(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     update_state(
         mode=mode,
         current_actor="main",
+        tunnel_style="orbital_cathedral",
         camera={"x": 0, "y": 0, "zoom": 1.06 if mode == "battle" else 1},
     )
 

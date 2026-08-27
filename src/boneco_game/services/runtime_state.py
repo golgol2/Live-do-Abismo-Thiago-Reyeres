@@ -19,6 +19,7 @@ def default_state() -> dict[str, Any]:
         "avatar": DEFAULT_AVATAR,
         "map_name": DEFAULT_MAP,
         "visual_mode": "tunnel",
+        "tunnel_style": "classic",
         "mode": "normal",
         "current_actor": "main",
         "camera": {"x": 0, "y": 0, "zoom": 1.0},
@@ -138,6 +139,8 @@ def renderer_state() -> dict[str, Any]:
         "media": media,
         "music": music,
         "visual_people": live_events.status().get("recent_people", []),
+        "gift_wall": live_events.status().get("wall_gifts", []),
+        "top_gifter": live_events.status().get("top_gifter"),
         "media_version": _media_version({**media, "music": music}),
         "walk_motion": _walk_motion(avatar),
     }

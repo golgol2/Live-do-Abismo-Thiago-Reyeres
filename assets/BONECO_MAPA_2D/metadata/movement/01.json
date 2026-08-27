@@ -1,0 +1,26 @@
+{
+  "type": "walk_cycle",
+  "version": 1,
+  "job_id": "de8cf67eea6b4f56ad3d6235501d0a8b",
+  "video_path": "/media/allana/Dados240/BONECO_GAME/assets/BONECO_MAPA_2D/Andando_Direita/01.webm",
+  "direction": "direita",
+  "source_direction": "direita",
+  "mirrored": false,
+  "duration_seconds": 2.042,
+  "trim_start": 3.828,
+  "trim_end": 5.874,
+  "foot_anchor": {
+    "x": 0.5,
+    "y": 0.92,
+    "unit": "normalized"
+  },
+  "chroma": {
+    "key_color": "#08dd1d",
+    "similarity": 0.165,
+    "blend": 0.106,
+    "edge_px": 2,
+    "blur_px": 0.7,
+    "despill": 0.75
+  },
+  "created_at": 1787699765
+}

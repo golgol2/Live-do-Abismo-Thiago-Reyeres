@@ -1,0 +1,169 @@
+{
+  "version": 2,
+  "avatar": "BONECO_MAPA_2D",
+  "map_name": "Padrao",
+  "world": {
+    "width": 1280,
+    "height": 720
+  },
+  "stage": {
+    "width": 720,
+    "height": 1280
+  },
+  "viewport": {
+    "x": 437.5,
+    "y": 0,
+    "w": 405,
+    "h": 720,
+    "output_width": 720,
+    "output_height": 1280
+  },
+  "camera": {
+    "x": 437.5,
+    "y": 0,
+    "zoom": 1,
+    "start_x": 437.5,
+    "min_x": 0,
+    "max_x": 875
+  },
+  "movement": {
+    "camera_speed": 3.25,
+    "stop_follow_seconds": 0.85,
+    "run_direction": "right",
+    "main_camera_scale": 1.39,
+    "main_camera_x_offset": 62.0,
+    "main_camera_y_offset": -170.0,
+    "wide_shot_enabled": true,
+    "wide_shot_chance": 0.15,
+    "wide_shot_viewport_scale": 1.75,
+    "wide_shot_y_offset": -210.0,
+    "run_start_shot_scale_min": 1.35,
+    "run_start_shot_scale_max": 2.45,
+    "run_stop_shot_scale_min": 1.25,
+    "run_stop_shot_scale_max": 2.25,
+    "run_stop_shot_x_offset": 55.0,
+    "wide_shot_duration_min": 5.0,
+    "wide_shot_duration_max": 9.0,
+    "wide_shot_interval_min": 7.0,
+    "wide_shot_interval_max": 15.0
+  },
+  "spawn_points": {
+    "main": {
+      "x": 640,
+      "y": 686
+    },
+    "dj": {
+      "x": 980,
+      "y": 590
+    },
+    "oracle": {
+      "x": 220,
+      "y": 590
+    }
+  },
+  "objects": [
+    {
+      "id": "floor_piso_01",
+      "name": "PISO.png",
+      "layer": "floor",
+      "asset": "BONECO_MAPA_2D/Mapas/Padrao/floor/PISO.png",
+      "x": -159.0,
+      "y": 491.0,
+      "w": 2720.0,
+      "h": 340.0,
+      "z": 30,
+      "parallax": 1.0,
+      "visible": true,
+      "lock_ratio": true
+    },
+    {
+      "id": "obj_1787690962673_2063",
+      "name": "PISO.png copia",
+      "layer": "floor",
+      "asset": "BONECO_MAPA_2D/Mapas/Padrao/floor/PISO.png",
+      "x": -378.0,
+      "y": 536.0,
+      "w": 2720.0,
+      "h": 340.0,
+      "z": 30,
+      "parallax": 1.0,
+      "visible": true,
+      "lock_ratio": true
+    },
+    {
+      "id": "obj_1787691017303_2732",
+      "name": "PISO.png copia",
+      "layer": "floor",
+      "asset": "BONECO_MAPA_2D/Mapas/Padrao/floor/PISO.png",
+      "x": -198.0,
+      "y": 575.0,
+      "w": 2720.0,
+      "h": 340.0,
+      "z": 30,
+      "parallax": 1.0,
+      "visible": true,
+      "lock_ratio": true
+    },
+    {
+      "id": "obj_1787715476537_8658",
+      "name": "CASA CARTOM.png",
+      "layer": "back_props",
+      "asset": "BONECO_MAPA_2D/IMGS_EDIÇAO/CASA CARTOM.png",
+      "x": 127.0,
+      "y": -563.0,
+      "w": 1150.0,
+      "h": 1150.0,
+      "z": 0,
+      "parallax": 1.0,
+      "visible": true,
+      "lock_ratio": true
+    },
+    {
+      "id": "obj_1787718558522_3787",
+      "name": "Lixo_01.png",
+      "layer": "back_props",
+      "asset": "BONECO_MAPA_2D/IMGS_EDIÇAO/Lixo_01.png",
+      "x": -98.0,
+      "y": 370.0,
+      "w": 279.0,
+      "h": 219.0,
+      "z": 0,
+      "parallax": 1.0,
+      "visible": true,
+      "lock_ratio": true
+    }
+  ],
+  "updated_at": 1787725341.529811,
+  "layers": [
+    {
+      "id": "sky",
+      "label": "Ceu",
+      "parallax": 0.08,
+      "z": 0
+    },
+    {
+      "id": "far_bg",
+      "label": "Fundo distante",
+      "parallax": 0.22,
+      "z": 10
+    },
+    {
+      "id": "back_props",
+      "label": "Atras do personagem",
+      "parallax": 0.55,
+      "z": 20
+    },
+    {
+      "id": "floor",
+      "label": "Piso/base",
+      "parallax": 1,
+      "z": 30
+    },
+    {
+      "id": "front_props",
+      "label": "Frente do personagem",
+      "parallax": 1,
+      "z": 70
+    }
+  ]
+}

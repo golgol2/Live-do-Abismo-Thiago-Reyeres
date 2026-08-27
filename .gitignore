@@ -1,0 +1,33 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+logs/
+runs/
+private/
+*.tmp
+*.log
+
+
+# Videos - não enviar ao GitHub
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.wmv
+*.m4v
+*.mpeg
+*.mpg
+
+# Videos - não enviar ao GitHub
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.wmv
+*.m4v
+*.mpeg
+*.mpg
+*.zip

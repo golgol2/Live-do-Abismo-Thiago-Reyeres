@@ -1,0 +1,20 @@
+{
+  "/media/allana/Dados240/BONECO_GAME/assets/BONECO_MAPA_2D/ANDANDO/CORRENDO.mp4": {
+    "start": 1.7,
+    "accel_end": 3.485,
+    "loop_start": 4.006,
+    "loop_end": 7.021,
+    "decel_start": 8.781,
+    "stop_end": 14.6,
+    "key_color": "#08dd1d",
+    "similarity": 0.165,
+    "blend": 0.09,
+    "edge_px": 2,
+    "blur_px": 0.7,
+    "despill": 0.75,
+    "width": 832,
+    "height": 1472,
+    "crf": 18,
+    "fit": "cover"
+  }
+}

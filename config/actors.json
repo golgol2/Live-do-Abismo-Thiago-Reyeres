@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "default_actor": "main",
+  "actors": {
+    "main": {
+      "label": "Boneco",
+      "avatar": "BONECO_MAPA_2D",
+      "map_point": "main",
+      "enabled": true,
+      "role": "personagem principal"
+    },
+    "dj": {
+      "label": "DJ",
+      "avatar": "",
+      "map_point": "dj",
+      "enabled": false,
+      "role": "quadro futuro em ponto do mapa"
+    },
+    "oracle": {
+      "label": "Oráculo",
+      "avatar": "",
+      "map_point": "oracle",
+      "enabled": false,
+      "role": "quadro futuro em ponto do mapa"
+    }
+  }
+}
+

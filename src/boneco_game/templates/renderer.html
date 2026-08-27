@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=720,height=1280,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <meta name="google" content="notranslate">
+  <title>Boneco Game Renderer</title>
+  <link rel="stylesheet" href="/static/css/renderer.css?v=22">
+</head>
+<body class="notranslate">
+  <div id="stage">
+    <canvas id="tunnelCanvas" width="360" height="640" aria-hidden="true"></canvas>
+    <div id="skyLayer" class="skyLayer" aria-hidden="true">
+      <div class="skyStars"></div>
+      <div class="skyClouds"></div>
+      <div class="skyOrb"></div>
+    </div>
+    <div id="world">
+      <div id="mapLower"></div>
+      <div id="mapBack"></div>
+      <div id="actorLayer">
+        <div id="actorShadow"></div>
+        <div id="bellyProfile" class="belly-profile" hidden>
+          <img id="bellyProfileImage" alt="" hidden>
+          <span id="bellyProfileLetter">B</span>
+        </div>
+        <video id="actorVideoA" class="actorVideo active" playsinline muted></video>
+        <video id="actorVideoB" class="actorVideo" playsinline muted></video>
+      </div>
+      <div id="mapFront"></div>
+    </div>
+    <div id="hud">
+      <section id="messageCard" class="message-card" hidden>
+        <div id="avatarRing" class="avatar-ring">
+          <img id="avatarImage" alt="" hidden>
+          <span id="avatarLetter">B</span>
+        </div>
+        <div class="message-copy">
+          <strong id="messageTitle">Boneco</strong>
+          <p id="messageText"></p>
+        </div>
+      </section>
+      <button id="audioUnlock" type="button" hidden>Ativar áudio</button>
+    </div>
+    <audio id="sceneAudio" preload="auto"></audio>
+    <audio id="musicAudio" preload="auto" loop></audio>
+  </div>
+  <script src="/static/js/renderer.js?v=51"></script>
+</body>
+</html>

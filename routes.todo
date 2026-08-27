@@ -1,0 +1,15 @@
+Rotas planejadas:
+
+- /api/live/start
+- /api/live/stop
+- /api/monitor/start
+- /api/monitor/stop
+- /api/tts/warmup
+- /api/tts/synthesize
+- /api/transmission/start
+- /api/transmission/stop
+- /api/scene/go-to
+- /api/scene/return-main
+- /api/map/objects/upload
+- /api/movement/process
+

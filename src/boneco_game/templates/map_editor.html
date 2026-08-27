@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Editor de mapa</title>
+  <link rel="stylesheet" href="/static/css/panel.css">
+  <link rel="stylesheet" href="/static/css/map_editor.css?v=6">
+</head>
+<body>
+  <main class="map-editor-shell">
+    <header class="editor-topbar">
+      <div>
+        <strong>Editor de mapa</strong>
+        <span>{{ avatar }} / {{ map_name }}</span>
+      </div>
+      <nav>
+        <a href="/" target="_self">Painel</a>
+        <a href="/renderer" target="_blank">Prévia renderer</a>
+        <button id="loadMap" type="button">Recarregar</button>
+        <button id="saveMap" type="button">Salvar</button>
+      </nav>
+    </header>
+
+    <section class="map-editor-grid">
+      <aside class="editor-panel object-panel">
+        <h2>Objetos</h2>
+        <div class="compact-row">
+          <button id="addFloor" type="button">Piso</button>
+          <button id="duplicateObject" type="button">Duplicar</button>
+          <button id="deleteObject" type="button">Excluir</button>
+        </div>
+        <label>Categoria de assets</label>
+        <select id="assetCategorySelect"></select>
+        <label>Buscar imagem</label>
+        <div class="asset-search-row">
+          <input id="assetSearch" placeholder="Nome ou pasta do asset">
+          <button id="refreshAssets" type="button">Atualizar</button>
+        </div>
+        <label>Asset selecionado</label>
+        <select id="assetSelect"></select>
+        <button id="addAssetObject" type="button">Adicionar asset</button>
+        <div id="assetBrowser" class="asset-browser"></div>
+        <div id="objectList" class="object-list"></div>
+      </aside>
+
+      <section class="preview-area">
+        <div class="preview-toolbar">
+          <span>Mundo 1280x720</span>
+          <span>moldura verde = area vertical da live</span>
+        </div>
+        <div class="world-frame">
+          <div id="mapCanvas">
+            <div id="previewObjects"></div>
+            <div id="liveViewportFrame"></div>
+            <div id="runLine" title="Linha do chão do personagem"></div>
+            <video id="previewActorVideo" muted autoplay loop playsinline></video>
+            <div id="previewActorFallback">Boneco</div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="editor-panel props-panel">
+        <h2>Movimento</h2>
+        <section class="movement-controls">
+          <label>
+            Velocidade da câmera
+            <div class="range-row">
+              <input id="cameraSpeedRange" type="range" min="0.2" max="4" step="0.05">
+              <input id="cameraSpeedValue" type="number" min="0.2" max="4" step="0.05">
+            </div>
+          </label>
+          <label>
+            Câmera principal
+            <div class="range-row">
+              <input id="mainCameraScaleRange" type="range" min="1" max="1.8" step="0.01">
+              <input id="mainCameraScaleValue" type="number" min="1" max="1.8" step="0.01">
+            </div>
+          </label>
+          <label>
+            Posição na câmera principal
+            <div class="range-row">
+              <input id="mainCameraXOffsetRange" type="range" min="-220" max="220" step="1">
+              <input id="mainCameraXOffsetValue" type="number" min="-220" max="220" step="1">
+            </div>
+          </label>
+          <label>
+            Altura da câmera principal
+            <div class="range-row">
+              <input id="mainCameraYOffsetRange" type="range" min="-240" max="240" step="1">
+              <input id="mainCameraYOffsetValue" type="number" min="-240" max="240" step="1">
+            </div>
+          </label>
+          <label>
+            Parada do movimento
+            <div class="range-row">
+              <input id="stopFollowRange" type="range" min="0" max="4" step="0.05">
+              <input id="stopFollowValue" type="number" min="0" max="4" step="0.05">
+            </div>
+          </label>
+          <label>
+            Afastamento da câmera
+            <div class="range-row">
+              <input id="wideShotScaleRange" type="range" min="1" max="1.75" step="0.01">
+              <input id="wideShotScaleValue" type="number" min="1" max="1.75" step="0.01">
+            </div>
+          </label>
+          <label>
+            Altura no afastamento
+            <div class="range-row">
+              <input id="wideShotYOffsetRange" type="range" min="-240" max="240" step="1">
+              <input id="wideShotYOffsetValue" type="number" min="-240" max="240" step="1">
+            </div>
+          </label>
+          <label>
+            Chance aleatória
+            <div class="range-row">
+              <input id="wideShotChanceRange" type="range" min="0" max="1" step="0.01">
+              <input id="wideShotChanceValue" type="number" min="0" max="1" step="0.01">
+            </div>
+          </label>
+          <label>
+            Câmera ao começar corrida
+            <div class="range-row">
+              <input id="runStartShotMinValue" type="number" min="1" max="2.6" step="0.01" title="Mínimo">
+              <input id="runStartShotMaxValue" type="number" min="1" max="2.6" step="0.01" title="Máximo">
+            </div>
+          </label>
+          <label>
+            Câmera ao parar
+            <div class="range-row">
+              <input id="runStopShotMinValue" type="number" min="1" max="2.6" step="0.01" title="Mínimo">
+              <input id="runStopShotMaxValue" type="number" min="1" max="2.6" step="0.01" title="Máximo">
+            </div>
+          </label>
+          <label>
+            Parada mais à esquerda
+            <div class="range-row">
+              <input id="runStopShotXOffsetRange" type="range" min="0" max="180" step="1">
+              <input id="runStopShotXOffsetValue" type="number" min="0" max="180" step="1">
+            </div>
+          </label>
+          <p class="hint">Na posição da câmera principal: positivo deixa o personagem mais à esquerda; negativo deixa mais à direita.</p>
+        </section>
+
+        <h2>Propriedades</h2>
+        <label>Nome</label>
+        <input id="propName">
+        <label>Camada</label>
+        <select id="propLayer">
+          <option value="sky">Céu</option>
+          <option value="far_bg">Fundo distante</option>
+          <option value="back_props">Atrás do personagem</option>
+          <option value="floor">Piso/base</option>
+          <option value="interactive">Interativo</option>
+          <option value="front_props">Frente do personagem</option>
+        </select>
+        <div class="prop-grid">
+          <label>X<input id="propX" type="number" step="1"></label>
+          <label>Y<input id="propY" type="number" step="1"></label>
+          <label>W<input id="propW" type="number" step="1"></label>
+          <label>H<input id="propH" type="number" step="1"></label>
+          <label>Z<input id="propZ" type="number" step="1"></label>
+        </div>
+        <label class="checkline">
+          <input id="propVisible" type="checkbox">
+          Visível
+        </label>
+        <label class="checkline">
+          <input id="propLockRatio" type="checkbox">
+          Travar proporção ao redimensionar
+        </label>
+        <details>
+          <summary>JSON avançado</summary>
+          <textarea id="mapJson"></textarea>
+        </details>
+      </aside>
+    </section>
+  </main>
+  <script>
+    window.BONECO_MAP_EDITOR = {
+      avatar: {{ avatar|tojson }},
+      mapName: {{ map_name|tojson }},
+      idleVideo: {{ idle_video|tojson }}
+    };
+  </script>
+  <script src="/static/js/map_editor.js?v=11"></script>
+</body>
+</html>

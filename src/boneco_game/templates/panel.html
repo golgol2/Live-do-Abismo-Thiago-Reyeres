@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Boneco Game</title>
+  <link rel="stylesheet" href="/static/css/panel.css?v=7">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <strong>Boneco Game</strong>
+        <span>modelo jogo interativo</span>
+      </div>
+      <nav>
+        <button id="liveToggleTop" class="live-toggle" type="button">Iniciar live</button>
+        <button id="openScheduleModal" type="button">Programar live</button>
+        <a href="/renderer" target="_blank">Prévia renderer</a>
+        <a href="/map-editor" target="_blank">Editor de mapa</a>
+        <a href="/walk-editor" target="_blank">Editor de corrida</a>
+      </nav>
+    </header>
+
+    <section class="grid">
+      <article class="card">
+        <h1>Painel da live</h1>
+        <p>Base limpa para o novo fluxo. Aqui entram monitoramento, transmissão, TTS e controle do mapa em módulos separados.</p>
+        <div class="row">
+          <button id="refreshStatus">Atualizar status</button>
+          <button id="resetCamera">Resetar câmera</button>
+        </div>
+        <div class="mode-strip">
+          <strong>Modo atual</strong>
+          <span id="currentMode">carregando</span>
+          <button id="setNormalMode" type="button">Modo normal</button>
+          <button id="setBattleMode" type="button">Modo batalha HDMI</button>
+        </div>
+        <div class="control-strip">
+          <div>
+            <strong>Foto no peito</strong>
+            <span>Ajusta tamanho e posição dentro do círculo rosa</span>
+          </div>
+          <div class="mini-control">
+            <label for="bellyProfileScaleRange">Tamanho</label>
+            <input id="bellyProfileScaleRange" type="range" min="0.45" max="2.00" step="0.01" value="{{ '%.2f'|format(state.get('belly_profile_scale', 0.82)|float) }}">
+            <input id="bellyProfileScaleValue" type="number" min="0.45" max="2.00" step="0.01" value="{{ '%.2f'|format(state.get('belly_profile_scale', 0.82)|float) }}">
+          </div>
+          <div class="mini-control">
+            <label for="bellyProfileOffsetXRange">Horizontal</label>
+            <input id="bellyProfileOffsetXRange" type="range" min="-120" max="120" step="1" value="{{ state.get('belly_profile_offset_x', 0)|int }}">
+            <input id="bellyProfileOffsetXValue" type="number" min="-120" max="120" step="1" value="{{ state.get('belly_profile_offset_x', 0)|int }}">
+          </div>
+          <div class="mini-control">
+            <label for="bellyProfileOffsetYRange">Vertical</label>
+            <input id="bellyProfileOffsetYRange" type="range" min="-120" max="120" step="1" value="{{ state.get('belly_profile_offset_y', 0)|int }}">
+            <input id="bellyProfileOffsetYValue" type="number" min="-120" max="120" step="1" value="{{ state.get('belly_profile_offset_y', 0)|int }}">
+          </div>
+          <button id="applyBellyProfileScale" type="button">Aplicar agora</button>
+          <small id="bellyProfileScaleStatus">Aplica na live em tempo real.</small>
+        </div>
+        <pre id="statusBox">Carregando...</pre>
+      </article>
+
+      <article class="card">
+        <h2>Monitor TikTok</h2>
+        <p>Envia chat e presentes para as filas novas. O monitor exige Tor e não usa rede direta.</p>
+        <label>Usuário da live</label>
+        <input id="monitorUser" value="bonecodoabismo" placeholder="usuario sem @">
+        <label>Servidor do monitor</label>
+        <input id="monitorServer" value="http://127.0.0.1:2618">
+        <div class="row">
+          <button id="startMonitor">Iniciar monitor</button>
+          <button id="stopMonitor">Parar monitor</button>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2>Saída HTML</h2>
+        <p>Abre o renderer em uma janela dedicada para captura HDMI/Live Studio.</p>
+        <label>URL</label>
+        <input id="rendererUrl" value="http://127.0.0.1:9292/renderer">
+        <div class="split">
+          <div>
+            <label>Largura</label>
+            <input id="rendererWidth" type="number" value="720">
+          </div>
+          <div>
+            <label>Altura</label>
+            <input id="rendererHeight" type="number" value="1280">
+          </div>
+        </div>
+        <div class="split">
+          <div>
+            <label>X</label>
+            <input id="rendererX" type="number" value="0">
+          </div>
+          <div>
+            <label>Y</label>
+            <input id="rendererY" type="number" value="0">
+          </div>
+        </div>
+        <label>Display opcional</label>
+        <input id="rendererDisplay" placeholder="ex: :0">
+        <label class="checkline">
+          <input id="rendererFullscreen" type="checkbox">
+          Tela cheia/kiosk
+        </label>
+        <div class="row">
+          <button id="startRendererWindow">Abrir saída</button>
+          <button id="startBattleRendererWindow">Abrir batalha HDMI</button>
+          <button id="restartRendererWindow">Reiniciar saída</button>
+          <button id="stopRendererWindow">Parar saída</button>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2>Transmissão direta</h2>
+        <p>Com Streamlabs ativo, o sistema gera credenciais TikTok e inicia como no painel antigo. RTMP manual fica só como fallback.</p>
+        <label>Título</label>
+        <input id="streamTitle" value="Live Do Boneco do Abismo">
+        <label>Categoria</label>
+        <input id="streamGame" value="Others">
+        <label>Audiência</label>
+        <select id="streamAudience">
+          <option value="0">Padrão</option>
+          <option value="1">Restrita</option>
+        </select>
+        <label class="checkline">
+          <input id="streamAutoStreamlabs" type="checkbox" checked>
+          Gerar credenciais Streamlabs automaticamente
+        </label>
+        <label>RTMP manual opcional</label>
+        <input id="streamRtmpUrl" placeholder="Fallback manual se não gerar credenciais">
+        <label>Arquivo de saída para teste direto</label>
+        <input id="streamOutputFile" placeholder="/tmp/boneco_game_teste.flv">
+        <div class="split">
+          <div>
+            <label>Bitrate</label>
+            <input id="streamBitrate" type="number" value="3100">
+          </div>
+          <div>
+            <label>Encoder</label>
+            <select id="streamEncoder">
+              <option value="nvenc" selected>NVENC</option>
+              <option value="auto">Auto</option>
+              <option value="x264">x264</option>
+            </select>
+          </div>
+        </div>
+        <div class="split">
+          <div>
+            <label>Modo</label>
+            <select id="streamMode">
+              <option value="normal">Normal</option>
+              <option value="battle">Batalha HDMI</option>
+            </select>
+          </div>
+          <div>
+            <label>RTMP sink</label>
+            <select id="streamSink">
+              <option value="rtmp2sink" selected>GStreamer direto rtmp2</option>
+              <option value="ffmpeg">FFmpeg fallback</option>
+              <option value="rtmpsink">rtmpsink</option>
+            </select>
+          </div>
+        </div>
+        <label>Display</label>
+        <input id="streamDisplay" placeholder="ex: :0">
+        <label>Fonte de áudio .monitor</label>
+        <input id="streamAudioSource" placeholder="vazio = detectar monitor padrão">
+        <div class="row">
+          <button id="startTransmission">Iniciar transmissão</button>
+          <button id="stopTransmission">Parar transmissão</button>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2>Fala manual</h2>
+        <label>Personagem</label>
+        <select id="actor">
+          <option value="main">Boneco</option>
+          <option value="dj">DJ</option>
+          <option value="oracle">Oráculo</option>
+          <option value="guest">Convidado</option>
+        </select>
+        <label>Texto</label>
+        <textarea id="manualText" rows="5" placeholder="Texto para o personagem falar..."></textarea>
+        <button id="sendSpeech">Enviar para fila</button>
+      </article>
+
+      <article class="card">
+        <h2>Simular evento</h2>
+        <p>Entrada para testar a fila nova sem TikTok. Presente tem prioridade sobre comentário.</p>
+        <label>Usuário</label>
+        <input id="eventUser" value="teste" placeholder="usuario">
+        <label>Nome exibido</label>
+        <input id="eventDisplay" value="Teste" placeholder="Nome">
+        <label>Comentário</label>
+        <textarea id="eventComment" rows="3" placeholder="Mensagem do chat..."></textarea>
+        <div class="row">
+          <button id="sendCommentEvent">Enviar comentário</button>
+        </div>
+        <label>Presente</label>
+        <input id="eventGift" value="Rosa" placeholder="Nome do presente">
+        <label>Quantidade</label>
+        <input id="eventGiftCount" type="number" min="1" value="1">
+        <div class="row">
+          <button id="sendGiftEvent">Enviar presente</button>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2>Escopo novo</h2>
+        <ul>
+          <li>Personagem anda pelo mapa 2D.</li>
+          <li>DJ e Oráculo serão pontos do mapa, não blocos misturados no fluxo.</li>
+          <li>Câmera e lip-sync ficam como prioridade técnica.</li>
+          <li>Avatares/app de usuários entram depois como cenas do mapa.</li>
+        </ul>
+      </article>
+    </section>
+  </main>
+  <dialog id="scheduleModal" class="modal">
+    <form method="dialog" class="modal-card">
+      <header class="modal-head">
+        <div>
+          <strong>Programar live</strong>
+          <span>configuração usada pelo botão Iniciar live</span>
+        </div>
+        <button id="closeScheduleModal" type="button">Fechar</button>
+      </header>
+
+      <section class="modal-grid">
+        <div>
+          <label>Usuário da live</label>
+          <input id="scheduleUsername" placeholder="usuario sem @">
+        </div>
+        <div>
+          <label>Servidor do monitor</label>
+          <input id="scheduleMonitorServer" placeholder="http://127.0.0.1:2618">
+        </div>
+        <div>
+          <label>Modo</label>
+          <select id="scheduleMode">
+            <option value="normal">Normal</option>
+            <option value="battle">Batalha HDMI</option>
+          </select>
+        </div>
+        <div>
+          <label>Título</label>
+          <input id="scheduleTitle" placeholder="Live Do Boneco do Abismo">
+        </div>
+        <div>
+          <label>Categoria</label>
+          <input id="scheduleGame" placeholder="Others">
+        </div>
+        <div>
+          <label>Audiência</label>
+          <select id="scheduleAudience">
+            <option value="0">Padrão</option>
+            <option value="1">Restrita</option>
+          </select>
+        </div>
+        <div>
+          <label>Bitrate</label>
+          <input id="scheduleBitrate" type="number" min="300" max="12000" step="100">
+        </div>
+        <div>
+          <label>Encoder</label>
+          <select id="scheduleEncoder">
+              <option value="nvenc" selected>NVENC</option>
+              <option value="auto">Auto</option>
+              <option value="x264">x264</option>
+          </select>
+        </div>
+        <div>
+          <label>RTMP sink</label>
+          <select id="scheduleSink">
+            <option value="rtmp2sink" selected>GStreamer direto rtmp2</option>
+            <option value="ffmpeg">FFmpeg fallback</option>
+            <option value="rtmpsink">rtmpsink</option>
+          </select>
+        </div>
+      </section>
+
+      <label class="checkline">
+        <input id="scheduleAutoStreamlabs" type="checkbox">
+        Gerar credenciais Streamlabs automaticamente
+      </label>
+      <label>RTMP manual opcional</label>
+      <input id="scheduleRtmpUrl" placeholder="Use só se não for gerar credenciais">
+      <label>Arquivo de saída para teste direto</label>
+      <input id="scheduleOutputFile" placeholder="/tmp/boneco_game_teste.flv">
+
+      <section class="modal-grid">
+        <div>
+          <label>Display</label>
+          <input id="scheduleDisplay" placeholder="ex: :0">
+        </div>
+        <div>
+          <label>Fonte de áudio .monitor</label>
+          <input id="scheduleAudioSource" placeholder="vazio = detectar monitor padrão">
+        </div>
+        <div>
+          <label>Entrar mínimo (min)</label>
+          <input id="scheduleStartMin" type="number" min="1">
+        </div>
+        <div>
+          <label>Entrar máximo (min)</label>
+          <input id="scheduleStartMax" type="number" min="1">
+        </div>
+        <div>
+          <label>Finalizar mínimo (min)</label>
+          <input id="scheduleStopMin" type="number" min="1">
+        </div>
+        <div>
+          <label>Finalizar máximo (min)</label>
+          <input id="scheduleStopMax" type="number" min="1">
+        </div>
+      </section>
+
+      <label class="checkline">
+        <input id="scheduleAutoEnabled" type="checkbox">
+        Ativar entrada e saída automática futuramente
+      </label>
+      <p class="modal-note">Com Streamlabs marcado, o botão do topo gera RTMP automaticamente. Sem Streamlabs e sem RTMP, ele abre apenas saída HTML + monitor.</p>
+
+      <footer class="modal-actions">
+        <button id="saveScheduleConfig" type="button">Salvar programação</button>
+        <button id="saveScheduleAndStart" type="button">Salvar e iniciar agora</button>
+      </footer>
+      <pre id="scheduleStatus">Carregando...</pre>
+    </form>
+  </dialog>
+  <script src="/static/js/panel.js?v=11"></script>
+</body>
+</html>

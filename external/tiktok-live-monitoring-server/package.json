@@ -1,0 +1,22 @@
+{
+  "name": "advttl-server-2",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "events": "^3.3.0",
+    "express": "^4.21.2",
+    "http": "^0.0.1-security",
+    "https": "^1.0.0",
+    "request": "^2.88.2",
+    "socket.io": "^4.8.1",
+    "tiktok-live-connector": "^2.1.1-beta1",
+    "url": "^0.11.4"
+  }
+}

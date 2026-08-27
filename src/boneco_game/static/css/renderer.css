@@ -47,6 +47,17 @@ body {
   bottom: 132px;
 }
 
+#cameraLayer {
+  position: absolute;
+  inset: 0;
+  width: 720px;
+  height: 1280px;
+  overflow: visible;
+  transform-origin: 50% 50%;
+  transform: translate3d(0, 0, 0) scale(1);
+  will-change: transform;
+}
+
 #tunnelCanvas {
   position: absolute;
   inset: 0;

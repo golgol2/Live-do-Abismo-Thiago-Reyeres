@@ -15,11 +15,13 @@ const DEFAULT_CAMERA_SPEED = 3.25;
 const DEFAULT_RUN_DIRECTION = "right";
 const MUSIC_IDLE_VOLUME = 0.16;
 const MUSIC_SPEECH_VOLUME = 0.055;
+const MUSIC_REACTION_VOLUME = 0.006;
 const TUNNEL_W = 360;
 const TUNNEL_H = 640;
 const BELLY_PROFILE_BASE_SIZE = 92;
 
 const stage = document.getElementById("stage");
+const cameraLayer = document.getElementById("cameraLayer");
 const tunnelCanvas = document.getElementById("tunnelCanvas");
 const tunnelCtx = tunnelCanvas ? tunnelCanvas.getContext("2d", { alpha: false }) : null;
 const skyLayer = document.getElementById("skyLayer");
@@ -66,6 +68,7 @@ const tunnelImageCache = new Map();
 let mediaState = {
   idle: [],
   talking: [],
+  reactions: [],
   walk_right: [],
   walk_left: [],
   walk_start_right: [],
@@ -87,6 +90,10 @@ let mediaCacheVersion = "";
 let activeSpeechToken = 0;
 let speechBusy = false;
 let speechFetchBusy = false;
+let reactionBusy = false;
+let answeredInteractionCount = 0;
+let lastReactionVideo = "";
+const REACTION_EVERY_RESPONSES = 20;
 let runtimeConfig = {
   micro_pause_freeze_max: DEFAULT_MICRO_PAUSE_MAX,
   pause_to_mute_min: DEFAULT_PAUSE_TO_MUTE_MIN,
@@ -128,6 +135,34 @@ let sceneCamera = {
   lastStopScale: 0,
   activeShotKind: "",
 };
+
+let liveCameraConfig = {
+  enabled: true,
+  manualShot: "auto",
+  mediumZoomMax: 1.22,
+  closeZoomMax: 1.40,
+  xMax: 22,
+  closeYMax: 175,
+  transitionMin: 3,
+  transitionMax: 7,
+  responsesMin: 2,
+  responsesMax: 5,
+};
+
+let liveCamera = {
+  currentZoom: 1,
+  targetZoom: 1,
+  currentX: 0,
+  targetX: 0,
+  currentY: 0,
+  targetY: 0,
+  shot: "full",
+  responsesLeft: 3,
+  transitionSeconds: 5,
+  lastFrameAt: 0,
+  lastManualShot: "auto",
+  initialized: false,
+};
 const bellyTrackCanvas = document.createElement("canvas");
 bellyTrackCanvas.width = 144;
 bellyTrackCanvas.height = 256;
@@ -137,6 +172,119 @@ bellyMaskCanvas.width = bellyTrackCanvas.width;
 bellyMaskCanvas.height = bellyTrackCanvas.height;
 const bellyMaskCtx = bellyMaskCanvas.getContext("2d", { willReadFrequently: true });
 let bellyTrackPosition = { x: 360, y: 640, size: 92, holeRadius: 46 };
+
+function randomBetween(min, max) {
+  const a = Number(min), b = Number(max);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
+  if (b <= a) return a;
+  return a + Math.random() * (b - a);
+}
+
+function randomIntInclusive(min, max) {
+  return Math.round(randomBetween(Math.ceil(min), Math.floor(max)));
+}
+
+function normalizeLiveCameraConfig(state = {}) {
+  const mediumMax = clampNumber(state.camera_medium_zoom_max, 1.08, 1.30, 1.22);
+  const closeMax = Math.max(mediumMax + 0.03, clampNumber(state.camera_close_zoom_max, 1.18, 1.48, 1.40));
+  const transitionMin = clampNumber(state.camera_transition_min, 1.5, 12, 3);
+  const transitionMax = Math.max(transitionMin, clampNumber(state.camera_transition_max, transitionMin, 15, 7));
+  const responsesMin = Math.round(clampNumber(state.camera_responses_min, 1, 8, 2));
+  const responsesMax = Math.max(responsesMin, Math.round(clampNumber(state.camera_responses_max, responsesMin, 12, 5)));
+  liveCameraConfig = {
+    enabled: state.dynamic_camera_enabled !== false,
+    manualShot: ["auto", "full", "medium", "close"].includes(String(state.camera_manual_shot || "auto"))
+      ? String(state.camera_manual_shot || "auto") : "auto",
+    mediumZoomMax: mediumMax,
+    closeZoomMax: closeMax,
+    xMax: clampNumber(state.camera_x_max, 0, 60, 22),
+    closeYMax: clampNumber(state.camera_close_y_max, 40, 260, 175),
+    transitionMin, transitionMax, responsesMin, responsesMax,
+  };
+}
+
+function cameraShotTarget(kind) {
+  const cfg = liveCameraConfig;
+  const x = randomBetween(-cfg.xMax, cfg.xMax);
+  if (kind === "close") {
+    return {
+      kind,
+      zoom: randomBetween(Math.max(1.20, cfg.mediumZoomMax + 0.03), cfg.closeZoomMax),
+      x,
+      y: randomBetween(cfg.closeYMax * 0.66, cfg.closeYMax),
+    };
+  }
+  if (kind === "medium") {
+    return {
+      kind,
+      zoom: randomBetween(1.08, cfg.mediumZoomMax),
+      x: x * 0.82,
+      y: randomBetween(cfg.closeYMax * 0.10, cfg.closeYMax * 0.26),
+    };
+  }
+  return { kind: "full", zoom: randomBetween(1.0, 1.05), x: x * 0.45, y: randomBetween(-10, 14) };
+}
+
+function chooseNextCameraShot(forceKind = "") {
+  let kind = String(forceKind || "").trim().toLowerCase();
+  if (!["full", "medium", "close"].includes(kind)) {
+    const choices = liveCamera.shot === "close"
+      ? ["full", "medium", "medium", "full"]
+      : liveCamera.shot === "medium"
+        ? ["full", "close", "full", "close"]
+        : ["medium", "close", "medium", "close", "full"];
+    kind = choices[Math.floor(Math.random() * choices.length)] || "full";
+  }
+  const target = cameraShotTarget(kind);
+  liveCamera.shot = target.kind;
+  liveCamera.targetZoom = target.zoom;
+  liveCamera.targetX = target.x;
+  liveCamera.targetY = target.y;
+  liveCamera.transitionSeconds = randomBetween(liveCameraConfig.transitionMin, liveCameraConfig.transitionMax);
+  liveCamera.responsesLeft = randomIntInclusive(liveCameraConfig.responsesMin, liveCameraConfig.responsesMax);
+}
+
+function resetDynamicLiveCamera() {
+  Object.assign(liveCamera, {
+    currentZoom: 1, targetZoom: 1,
+    currentX: 0, targetX: 0,
+    currentY: 0, targetY: 0,
+    shot: "full",
+    responsesLeft: randomIntInclusive(liveCameraConfig.responsesMin, liveCameraConfig.responsesMax),
+    transitionSeconds: Math.max(2, liveCameraConfig.transitionMin),
+    lastFrameAt: 0,
+    initialized: true,
+  });
+  if (cameraLayer) cameraLayer.style.transform = "translate3d(0px,0px,0) scale(1)";
+}
+
+function onSpeechCompletedForCamera() {
+  if (!isTunnelMode() || !liveCameraConfig.enabled || liveCameraConfig.manualShot !== "auto") return;
+  liveCamera.responsesLeft -= 1;
+  if (liveCamera.responsesLeft <= 0) chooseNextCameraShot();
+}
+
+function updateDynamicLiveCamera(now) {
+  if (!cameraLayer) return;
+  if (!isTunnelMode() || !liveCameraConfig.enabled) {
+    liveCamera.targetZoom = 1; liveCamera.targetX = 0; liveCamera.targetY = 0;
+  } else {
+    if (!liveCamera.initialized) resetDynamicLiveCamera();
+    if (liveCameraConfig.manualShot !== liveCamera.lastManualShot) {
+      liveCamera.lastManualShot = liveCameraConfig.manualShot;
+      chooseNextCameraShot(liveCameraConfig.manualShot === "auto" ? "" : liveCameraConfig.manualShot);
+    }
+  }
+  if (!liveCamera.lastFrameAt) liveCamera.lastFrameAt = now;
+  const dt = Math.min(0.08, Math.max(0.001, (now - liveCamera.lastFrameAt) / 1000));
+  liveCamera.lastFrameAt = now;
+  const smoothing = 1 - Math.exp(-dt * (4.2 / Math.max(1.5, Number(liveCamera.transitionSeconds || 5))));
+  liveCamera.currentZoom += (liveCamera.targetZoom - liveCamera.currentZoom) * smoothing;
+  liveCamera.currentX += (liveCamera.targetX - liveCamera.currentX) * smoothing;
+  liveCamera.currentY += (liveCamera.targetY - liveCamera.currentY) * smoothing;
+  cameraLayer.style.transform =
+    `translate3d(${liveCamera.currentX.toFixed(2)}px, ${liveCamera.currentY.toFixed(2)}px, 0) scale(${liveCamera.currentZoom.toFixed(5)})`;
+}
 
 function fitStage() {
   const scale = Math.max(window.innerWidth / STAGE_WIDTH, window.innerHeight / STAGE_HEIGHT);
@@ -340,7 +488,7 @@ function updateMusicVolume() {
     playNextMusic(false);
     return;
   }
-  const target = speechBusy ? MUSIC_SPEECH_VOLUME : MUSIC_IDLE_VOLUME;
+  const target = reactionBusy ? MUSIC_REACTION_VOLUME : (speechBusy ? MUSIC_SPEECH_VOLUME : MUSIC_IDLE_VOLUME);
   musicAudio.volume += (target - musicAudio.volume) * 0.055;
 }
 
@@ -1158,6 +1306,7 @@ function updateWalking(now) {
 
 function gameLoop(now) {
   updateWalking(now);
+  updateDynamicLiveCamera(now);
   requestAnimationFrame(gameLoop);
 }
 
@@ -1198,6 +1347,8 @@ async function switchVideo(path, options = {}) {
     idleFullPlay = Boolean(options.fullPlay);
     idleFullPlayStartedAt = idleFullPlay ? performance.now() : 0;
     activeVideo.loop = Boolean(options.fullPlay) ? false : options.loop !== false;
+    activeVideo.muted = options.muted !== false;
+    activeVideo.volume = options.muted === false ? 1 : activeVideo.volume;
     activeVideo.playbackRate = Number(options.playbackRate || 1);
     try {
       activeVideo.currentTime = Number(options.startAt || 0);
@@ -1215,7 +1366,8 @@ async function switchVideo(path, options = {}) {
   idleFullPlay = Boolean(options.fullPlay);
   idleFullPlayStartedAt = idleFullPlay ? performance.now() : 0;
   standbyVideo.loop = Boolean(options.fullPlay) ? false : options.loop !== false;
-  standbyVideo.muted = true;
+  standbyVideo.muted = options.muted !== false;
+  standbyVideo.volume = options.muted === false ? 1 : standbyVideo.volume;
   standbyVideo.preload = "auto";
   standbyVideo.playbackRate = Number(options.playbackRate || 1);
   standbyVideo.currentTime = Number(options.startAt || 0);
@@ -1289,6 +1441,9 @@ function shouldHoldSpeechForIdleFullPlay() {
 }
 
 async function setScene(scene, options = {}) {
+  if (reactionBusy && scene !== "reaction" && !options.allowDuringReaction) {
+    return false;
+  }
   if (currentScene === scene && currentVideo && !options.force) return true;
   const list = mediaForScene(scene);
   const path = pick(list, currentVideo) || pick(mediaState.idle, currentVideo);
@@ -1321,6 +1476,7 @@ async function pollState() {
     bellyProfileScale = clampNumber(payload.state?.belly_profile_scale, 0.45, 2.0, 0.82);
     bellyProfileOffsetX = clampNumber(payload.state?.belly_profile_offset_x, -120, 120, 0);
     bellyProfileOffsetY = clampNumber(payload.state?.belly_profile_offset_y, -120, 120, 0);
+    normalizeLiveCameraConfig(payload.state || {});
     visualMode = String(payload.state?.visual_mode || "tunnel") === "map" ? "map" : "tunnel";
     stage.dataset.visual = visualMode;
     stage.dataset.mode = String(urlMode || payload.state?.mode || "normal");
@@ -1341,8 +1497,98 @@ async function pollState() {
   }
 }
 
+
+function countsForNaturalReaction(job) {
+  const metadata = job?.metadata && typeof job.metadata === "object" ? job.metadata : {};
+  if (metadata.counts_as_reaction_response === true) return true;
+  if (String(metadata.source || "") !== "event_decision") return false;
+  const event = metadata.event && typeof metadata.event === "object" ? metadata.event : {};
+  const kind = String(event.kind || "").trim().toLowerCase();
+  return kind === "comment" || kind === "gift";
+}
+
+function waitForVideoEnd(video, maxMs = 30000) {
+  return new Promise(resolve => {
+    if (!video) {
+      resolve();
+      return;
+    }
+
+    let done = false;
+    let timer = 0;
+
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      video.removeEventListener("ended", finish);
+      video.removeEventListener("error", finish);
+      resolve();
+    };
+
+    const durationMs = Number.isFinite(video.duration) && video.duration > 0
+      ? Math.min(maxMs, Math.max(2500, video.duration * 1000 + 1500))
+      : maxMs;
+
+    timer = setTimeout(finish, durationMs);
+    video.addEventListener("ended", finish, { once: true });
+    video.addEventListener("error", finish, { once: true });
+  });
+}
+
+async function maybePlayNaturalReaction(job) {
+  if (!countsForNaturalReaction(job)) return false;
+
+  answeredInteractionCount += 1;
+  console.info("[reaction] resposta contabilizada", answeredInteractionCount, "/", REACTION_EVERY_RESPONSES);
+  if (answeredInteractionCount < REACTION_EVERY_RESPONSES) return false;
+  answeredInteractionCount = 0;
+
+  const list = Array.isArray(mediaState.reactions) ? mediaState.reactions.filter(Boolean) : [];
+  if (!list.length) return false;
+
+  const path = pick(list, lastReactionVideo) || pick(list);
+  if (!path) return false;
+
+  reactionBusy = true;
+  lastReactionVideo = path;
+  hideMessageCard();
+
+  try {
+    currentScene = "reaction";
+    const switched = await switchVideo(path, {
+      force: true,
+      loop: false,
+      fullPlay: true,
+      playbackRate: 1,
+      startAt: 0,
+      muted: false,
+    });
+    if (!switched) return false;
+
+    activeVideo.muted = false;
+    activeVideo.volume = 1;
+    await activeVideo.play().catch(() => {});
+    await waitForVideoEnd(activeVideo);
+
+    activeVideo.muted = true;
+    reactionBusy = false;
+    await setScene("idle", { force: true, allowDuringReaction: true });
+    return true;
+  } catch (err) {
+    console.warn("natural reaction failed", err);
+    if (activeVideo) activeVideo.muted = true;
+    await setScene("idle", { force: true }).catch(() => {});
+    return false;
+  } finally {
+    if (activeVideo) activeVideo.muted = true;
+    reactionBusy = false;
+  }
+}
+
+
 async function pollSpeech() {
-  if (speechBusy || speechFetchBusy) return false;
+  if (speechBusy || speechFetchBusy || reactionBusy) return false;
   if (shouldHoldSpeechForIdleFullPlay()) return false;
   speechFetchBusy = true;
   try {
@@ -1922,7 +2168,7 @@ async function playSpeechJob(job) {
   await setScene("talking", { force: true, startAt: 0 });
 
   if (!audioPath) {
-    window.setTimeout(() => finishSpeechVisual(token), fallbackMs);
+    window.setTimeout(() => finishSpeechVisual(token, job), fallbackMs);
     return;
   }
 
@@ -1932,18 +2178,18 @@ async function playSpeechJob(job) {
   sceneAudio.volume = 1;
   sceneAudio.muted = false;
 
-  const finishOnce = () => finishSpeechVisual(token);
+  const finishOnce = () => finishSpeechVisual(token, job);
   sceneAudio.addEventListener("ended", finishOnce, { once: true });
   sceneAudio.addEventListener("error", finishOnce, { once: true });
   startLipSync(timeline, sceneAudio, token);
   await sceneAudio.play().catch(() => {
     audioUnlock.hidden = false;
     stopTimeline();
-    window.setTimeout(() => finishSpeechVisual(token), fallbackMs);
+    window.setTimeout(() => finishSpeechVisual(token, job), fallbackMs);
   });
 }
 
-async function finishSpeechVisual(token = activeSpeechToken) {
+async function finishSpeechVisual(token = activeSpeechToken, job = null) {
   if (token !== activeSpeechToken) return;
   stopTimeline();
   sceneAudio.pause();
@@ -1952,6 +2198,8 @@ async function finishSpeechVisual(token = activeSpeechToken) {
   hideMessageCard();
   if (token !== activeSpeechToken) return;
   speechBusy = false;
+  onSpeechCompletedForCamera();
+  await maybePlayNaturalReaction(job);
   const startedNext = await pollSpeech();
   if (!startedNext && token === activeSpeechToken) {
     await setScene("idle").catch(console.warn);

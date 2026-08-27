@@ -20,7 +20,117 @@ async function refreshStatus() {
   document.getElementById("currentMode").textContent = payload.state?.mode || "preview";
   document.getElementById("statusBox").textContent = JSON.stringify(payload, null, 2);
   applyVisualControls(payload.state || {});
+  applyCameraControls(payload.state || {});
   updateLiveToggle(payload);
+}
+
+
+const cameraRangeMap = [
+  ["cameraMediumZoomMaxRange", "cameraMediumZoomMax", "cameraMediumZoomMaxOutput", 2, ""],
+  ["cameraCloseZoomMaxRange", "cameraCloseZoomMax", "cameraCloseZoomMaxOutput", 2, ""],
+  ["cameraXMaxRange", "cameraXMax", "cameraXMaxOutput", 0, " px"],
+  ["cameraCloseYMaxRange", "cameraCloseYMax", "cameraCloseYMaxOutput", 0, " px"],
+  ["cameraTransitionMinRange", "cameraTransitionMin", "cameraTransitionMinOutput", 1, " s"],
+  ["cameraTransitionMaxRange", "cameraTransitionMax", "cameraTransitionMaxOutput", 1, " s"],
+  ["cameraResponsesMinRange", "cameraResponsesMin", "cameraResponsesMinOutput", 0, ""],
+  ["cameraResponsesMaxRange", "cameraResponsesMax", "cameraResponsesMaxOutput", 0, ""],
+];
+
+function syncCameraRange(rangeId, valueId, outputId, digits, suffix) {
+  const range = document.getElementById(rangeId);
+  const value = document.getElementById(valueId);
+  const output = document.getElementById(outputId);
+  if (!range || !value || !output) return;
+  const parsed = Number(value.value);
+  const safe = Number.isFinite(parsed) ? parsed : Number(range.min || 0);
+  range.value = String(safe);
+  output.textContent = `${digits ? safe.toFixed(digits) : Math.round(safe)}${suffix}`;
+}
+
+function syncAllCameraRanges() {
+  for (const args of cameraRangeMap) syncCameraRange(...args);
+}
+
+function initCameraModalControls() {
+  for (const [rangeId, valueId, outputId, digits, suffix] of cameraRangeMap) {
+    const range = document.getElementById(rangeId);
+    const value = document.getElementById(valueId);
+    if (!range || !value) continue;
+    range.addEventListener("input", () => {
+      value.value = range.value;
+      syncCameraRange(rangeId, valueId, outputId, digits, suffix);
+    });
+    value.addEventListener("input", () => {
+      range.value = value.value;
+      syncCameraRange(rangeId, valueId, outputId, digits, suffix);
+    });
+  }
+  syncAllCameraRanges();
+}
+
+function openCameraModal() {
+  const modal = document.getElementById("cameraModal");
+  if (!modal) return;
+  applyCameraControls(latestStatus?.state || {});
+  syncAllCameraRanges();
+  modal.showModal();
+}
+
+function closeCameraModal() {
+  const modal = document.getElementById("cameraModal");
+  if (modal?.open) modal.close();
+}
+
+function applyCameraControls(state) {
+  const setValue = (id, value) => {
+    const el = document.getElementById(id);
+    if (el && document.activeElement !== el) el.value = value;
+  };
+  const enabled = document.getElementById("dynamicCameraEnabled");
+  if (enabled && document.activeElement !== enabled) enabled.checked = state.dynamic_camera_enabled !== false;
+  setValue("cameraMediumZoomMax", Number(state.camera_medium_zoom_max ?? 1.22).toFixed(2));
+  setValue("cameraCloseZoomMax", Number(state.camera_close_zoom_max ?? 1.40).toFixed(2));
+  setValue("cameraXMax", Math.round(Number(state.camera_x_max ?? 22)));
+  setValue("cameraCloseYMax", Math.round(Number(state.camera_close_y_max ?? 175)));
+  setValue("cameraTransitionMin", Number(state.camera_transition_min ?? 3).toFixed(1));
+  setValue("cameraTransitionMax", Number(state.camera_transition_max ?? 7).toFixed(1));
+  setValue("cameraResponsesMin", Math.round(Number(state.camera_responses_min ?? 2)));
+  setValue("cameraResponsesMax", Math.round(Number(state.camera_responses_max ?? 5)));
+  const status = document.getElementById("cameraSettingsStatus");
+  if (status) {
+    const mode = String(state.camera_manual_shot || "auto");
+    status.textContent = mode === "auto" ? "Automático ativo." : `Override manual: ${mode}.`;
+  }
+}
+
+function readCameraControls() {
+  const medium = clampNumber(document.getElementById("cameraMediumZoomMax")?.value, 1.08, 1.30, 1.22);
+  const close = Math.max(medium + 0.03, clampNumber(document.getElementById("cameraCloseZoomMax")?.value, 1.18, 1.48, 1.40));
+  const tmin = clampNumber(document.getElementById("cameraTransitionMin")?.value, 1.5, 12, 3);
+  const tmax = Math.max(tmin, clampNumber(document.getElementById("cameraTransitionMax")?.value, tmin, 15, 7));
+  const rmin = Math.round(clampNumber(document.getElementById("cameraResponsesMin")?.value, 1, 8, 2));
+  const rmax = Math.max(rmin, Math.round(clampNumber(document.getElementById("cameraResponsesMax")?.value, rmin, 12, 5)));
+  return {
+    dynamic_camera_enabled: Boolean(document.getElementById("dynamicCameraEnabled")?.checked),
+    camera_medium_zoom_max: Number(medium.toFixed(2)),
+    camera_close_zoom_max: Number(close.toFixed(2)),
+    camera_x_max: Math.round(clampNumber(document.getElementById("cameraXMax")?.value, 0, 60, 22)),
+    camera_close_y_max: Math.round(clampNumber(document.getElementById("cameraCloseYMax")?.value, 40, 260, 175)),
+    camera_transition_min: Number(tmin.toFixed(1)),
+    camera_transition_max: Number(tmax.toFixed(1)),
+    camera_responses_min: rmin,
+    camera_responses_max: rmax,
+  };
+}
+
+async function saveCameraControls(extra = {}) {
+  await post("/api/state", { ...readCameraControls(), ...extra });
+  await refreshStatus();
+}
+
+async function setCameraShot(mode) {
+  try { await saveCameraControls({ camera_manual_shot: mode }); }
+  catch (err) { alert(`Erro ao controlar câmera: ${err.message}`); }
 }
 
 function updateLiveToggle(payload) {
@@ -157,6 +267,17 @@ function flushBellyProfileControlsBeforeUnload() {
     keepalive: true,
   }).catch(() => {});
 }
+
+initCameraModalControls();
+document.getElementById("openCameraModal")?.addEventListener("click", openCameraModal);
+document.getElementById("closeCameraModal")?.addEventListener("click", closeCameraModal);
+document.getElementById("closeCameraModalBottom")?.addEventListener("click", closeCameraModal);
+document.getElementById("saveCameraSettings")?.addEventListener("click", () => saveCameraControls().catch(err => alert(err.message)));
+document.getElementById("dynamicCameraEnabled")?.addEventListener("change", () => saveCameraControls().catch(err => alert(err.message)));
+document.getElementById("cameraFullShot")?.addEventListener("click", () => setCameraShot("full"));
+document.getElementById("cameraMediumShot")?.addEventListener("click", () => setCameraShot("medium"));
+document.getElementById("cameraCloseShot")?.addEventListener("click", () => setCameraShot("close"));
+document.getElementById("cameraAutoShot")?.addEventListener("click", () => setCameraShot("auto"));
 
 document.getElementById("refreshStatus").addEventListener("click", refreshStatus);
 document.getElementById("resetCamera").addEventListener("click", async () => {

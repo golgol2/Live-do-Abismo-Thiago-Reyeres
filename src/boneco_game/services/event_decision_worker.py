@@ -66,7 +66,17 @@ def _worker_loop() -> None:
         })
         text, priority = _text_for_event(event)
         if text:
-            enqueue_text(text, actor="main", priority=priority, metadata={"source": "event_decision", "event": event})
+            event_kind = str(event.get("kind") or "").strip().lower()
+            enqueue_text(
+                text,
+                actor="main",
+                priority=priority,
+                metadata={
+                    "source": "event_decision",
+                    "event": event,
+                    "counts_as_reaction_response": event_kind in {"comment", "gift"},
+                },
+            )
         _write_status({
             "state": "queued_speech" if text else "ignored_event",
             "event_id": event.get("id"),

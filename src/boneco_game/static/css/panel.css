@@ -282,3 +282,18 @@ pre { min-height: 160px; white-space: pre-wrap; overflow: auto; }
 .system-update-list { min-height:150px; max-height:260px; margin:0; font-size:12px; }
 .system-update-output { min-height:82px; max-height:180px; margin-top:14px; }
 @media (max-width:820px) { .system-update-columns { grid-template-columns:1fr; } }
+
+.camera-modal-card { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; }
+.camera-sliders { display: grid; gap: 14px; margin: 18px 0; }
+.camera-slider-row { display: grid; gap: 8px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,.08); }
+.camera-slider-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.camera-slider-head label { margin: 0; font-weight: 700; }
+.camera-slider-head output { min-width: 76px; text-align: right; font-weight: 800; font-variant-numeric: tabular-nums; }
+.camera-slider-controls { display: grid; grid-template-columns: minmax(0,1fr) 92px; gap: 12px; align-items: center; }
+.camera-slider-controls input[type="range"] { width: 100%; min-width: 0; }
+.camera-slider-controls input[type="number"] { width: 92px; text-align: center; }
+.camera-shot-controls { display: grid; gap: 10px; }
+@media (max-width: 640px) {
+  .camera-slider-controls { grid-template-columns: minmax(0,1fr) 80px; }
+  .camera-slider-controls input[type="number"] { width: 80px; }
+}

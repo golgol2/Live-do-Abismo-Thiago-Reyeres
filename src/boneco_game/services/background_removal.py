@@ -13,7 +13,7 @@ from boneco_game.core.settings import ASSETS_DIR, PROJECT_DIR, RUNS_DIR
 STATUS_FILE = RUNS_DIR / "background_removal_status.json"
 PROCESS_SCRIPT = PROJECT_DIR / "scripts" / "process_green_avatar_videos.sh"
 SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}
-MODES = ("Falando", "Mudo")
+MODES = ("Falando", "Mudo", "Risadas")
 
 _LOCK = threading.Lock()
 _WORKER: threading.Thread | None = None

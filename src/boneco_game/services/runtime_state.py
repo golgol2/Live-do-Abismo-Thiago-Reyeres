@@ -25,6 +25,16 @@ def default_state() -> dict[str, Any]:
         "belly_profile_scale": 0.82,
         "belly_profile_offset_x": 0,
         "belly_profile_offset_y": 0,
+        "dynamic_camera_enabled": True,
+        "camera_manual_shot": "auto",
+        "camera_medium_zoom_max": 1.22,
+        "camera_close_zoom_max": 1.40,
+        "camera_x_max": 22,
+        "camera_close_y_max": 175,
+        "camera_transition_min": 3.0,
+        "camera_transition_max": 7.0,
+        "camera_responses_min": 2,
+        "camera_responses_max": 5,
         "updated_at": time.time(),
     }
 
@@ -110,6 +120,7 @@ def renderer_state() -> dict[str, Any]:
     media = {
         "idle": _video_list(avatar, "Mudo"),
         "talking": _video_list(avatar, "Falando"),
+        "reactions": _video_list(avatar, "Risadas"),
         "walk_right": _video_list(avatar, "Andando_Direita"),
         "walk_left": _video_list(avatar, "Andando_Esquerda"),
         "walk_start_right": _video_list(avatar, "Andando_Direita/Inicio"),

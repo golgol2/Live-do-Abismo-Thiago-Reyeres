@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Boneco Game</title>
-  <link rel="stylesheet" href="/static/css/panel.css?v=7">
+  <link rel="stylesheet" href="/static/css/panel.css?v=8">
 </head>
 <body>
   <main class="shell">
@@ -16,6 +16,7 @@
       <nav>
         <button id="liveToggleTop" class="live-toggle" type="button">Iniciar live</button>
         <button id="backgroundRemovalTop" type="button">Processar fundos</button>
+        <button id="openCameraModal" type="button">Câmera</button>
         <button id="systemUpdateTop" type="button">Atualizar sistema</button>
         <button id="openScheduleModal" type="button">Programar live</button>
         <a href="/renderer" target="_blank">Prévia renderer</a>
@@ -224,12 +225,53 @@
     </section>
   </main>
 
+  <dialog id="cameraModal" class="modal camera-modal">
+    <div class="modal-card camera-modal-card">
+      <header class="modal-head">
+        <div><strong>Câmera dinâmica</strong><span>Movimentos suaves e semi-aleatórios dentro dos limites.</span></div>
+        <button id="closeCameraModal" type="button">Fechar</button>
+      </header>
+
+      <label class="checkline">
+        <input id="dynamicCameraEnabled" type="checkbox" {% if state.get('dynamic_camera_enabled', true) %}checked{% endif %}>
+        Ativar câmera automática no modo túnel
+      </label>
+
+      <section class="camera-sliders">
+        <div class="camera-slider-row"><div class="camera-slider-head"><label>Zoom médio máximo</label><output id="cameraMediumZoomMaxOutput">1.22</output></div><div class="camera-slider-controls"><input id="cameraMediumZoomMaxRange" type="range" min="1.08" max="1.30" step="0.01"><input id="cameraMediumZoomMax" type="number" min="1.08" max="1.30" step="0.01" value="{{ '%.2f'|format(state.get('camera_medium_zoom_max', 1.22)|float) }}"></div></div>
+        <div class="camera-slider-row"><div class="camera-slider-head"><label>Zoom close máximo</label><output id="cameraCloseZoomMaxOutput">1.40</output></div><div class="camera-slider-controls"><input id="cameraCloseZoomMaxRange" type="range" min="1.18" max="1.48" step="0.01"><input id="cameraCloseZoomMax" type="number" min="1.18" max="1.48" step="0.01" value="{{ '%.2f'|format(state.get('camera_close_zoom_max', 1.40)|float) }}"></div></div>
+        <div class="camera-slider-row"><div class="camera-slider-head"><label>Movimento horizontal máximo</label><output id="cameraXMaxOutput">22 px</output></div><div class="camera-slider-controls"><input id="cameraXMaxRange" type="range" min="0" max="60" step="1"><input id="cameraXMax" type="number" min="0" max="60" step="1" value="{{ state.get('camera_x_max', 22)|int }}"></div></div>
+        <div class="camera-slider-row"><div class="camera-slider-head"><label>Descida da cena no close</label><output id="cameraCloseYMaxOutput">175 px</output></div><div class="camera-slider-controls"><input id="cameraCloseYMaxRange" type="range" min="40" max="260" step="1"><input id="cameraCloseYMax" type="number" min="40" max="260" step="1" value="{{ state.get('camera_close_y_max', 175)|int }}"></div></div>
+        <div class="camera-slider-row"><div class="camera-slider-head"><label>Transição mínima</label><output id="cameraTransitionMinOutput">3.0 s</output></div><div class="camera-slider-controls"><input id="cameraTransitionMinRange" type="range" min="1.5" max="12" step="0.5"><input id="cameraTransitionMin" type="number" min="1.5" max="12" step="0.5" value="{{ '%.1f'|format(state.get('camera_transition_min', 3.0)|float) }}"></div></div>
+        <div class="camera-slider-row"><div class="camera-slider-head"><label>Transição máxima</label><output id="cameraTransitionMaxOutput">7.0 s</output></div><div class="camera-slider-controls"><input id="cameraTransitionMaxRange" type="range" min="1.5" max="15" step="0.5"><input id="cameraTransitionMax" type="number" min="1.5" max="15" step="0.5" value="{{ '%.1f'|format(state.get('camera_transition_max', 7.0)|float) }}"></div></div>
+        <div class="camera-slider-row"><div class="camera-slider-head"><label>Respostas mínimas</label><output id="cameraResponsesMinOutput">2</output></div><div class="camera-slider-controls"><input id="cameraResponsesMinRange" type="range" min="1" max="8" step="1"><input id="cameraResponsesMin" type="number" min="1" max="8" step="1" value="{{ state.get('camera_responses_min', 2)|int }}"></div></div>
+        <div class="camera-slider-row"><div class="camera-slider-head"><label>Respostas máximas</label><output id="cameraResponsesMaxOutput">5</output></div><div class="camera-slider-controls"><input id="cameraResponsesMaxRange" type="range" min="1" max="12" step="1"><input id="cameraResponsesMax" type="number" min="1" max="12" step="1" value="{{ state.get('camera_responses_max', 5)|int }}"></div></div>
+      </section>
+
+      <section class="camera-shot-controls">
+        <strong>Teste de enquadramento</strong>
+        <div class="row">
+          <button id="cameraFullShot" type="button">Corpo todo</button>
+          <button id="cameraMediumShot" type="button">Médio</button>
+          <button id="cameraCloseShot" type="button">Close</button>
+          <button id="cameraAutoShot" type="button">Automático</button>
+        </div>
+        <small id="cameraSettingsStatus">Automático ativo.</small>
+      </section>
+
+      <footer class="modal-actions">
+        <button id="saveCameraSettings" type="button">Salvar e aplicar</button>
+        <button id="closeCameraModalBottom" type="button">Fechar</button>
+      </footer>
+    </div>
+  </dialog>
+
   <dialog id="backgroundRemovalModal" class="modal background-removal-modal">
     <div class="modal-card">
       <header class="modal-head">
         <div>
           <strong>Remover fundo dos vídeos</strong>
-          <span>Processa somente vídeos pendentes em Falando/Mudo → FUNDO_VERDE.</span>
+          <span>Processa vídeos pendentes em Falando, Mudo e Risadas → FUNDO_VERDE. Em Risadas, preserva também o áudio original.</span>
         </div>
         <button id="closeBackgroundRemovalModal" type="button">Fechar</button>
       </header>
@@ -395,6 +437,6 @@
   </dialog>
   <script src="/static/js/background_removal.js?v=1"></script>
   <script src="/static/js/system_update.js?v=1"></script>
-  <script src="/static/js/panel.js?v=11"></script>
+  <script src="/static/js/panel.js?v=13"></script>
 </body>
 </html>

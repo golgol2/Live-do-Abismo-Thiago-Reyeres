@@ -24,6 +24,7 @@ process_mode() {
   mkdir -p "$output_dir"
 
   while IFS= read -r -d '' source; do
+    source="$(realpath -- "$source")"
     local stem
     stem="$(basename "$source")"
     stem="${stem%.*}"
@@ -46,9 +47,28 @@ process_mode() {
       --height 1472 \
       --fit cover \
       --crf 18 | tee -a "$LOG_FILE"
+
+    if [[ "$mode" == "Risadas" ]]; then
+      local audio_tmp="$output_dir/.${stem}.audio.tmp.webm"
+      rm -f "$audio_tmp"
+      echo "preservando audio original $source" | tee -a "$LOG_FILE"
+      ffmpeg -hide_banner -loglevel error -y \
+        -i "$destination" \
+        -i "$source" \
+        -map 0:v:0 \
+        -map 1:a:0? \
+        -c:v copy \
+        -c:a libopus \
+        -b:a 128k \
+        -shortest \
+        "$audio_tmp"
+      mv -f "$audio_tmp" "$destination"
+      echo "audio preservado $destination" | tee -a "$LOG_FILE"
+    fi
   done < <(find "$source_dir" -maxdepth 1 -type f \( -iname '*.mp4' -o -iname '*.mov' -o -iname '*.webm' -o -iname '*.mkv' \) -print0 | sort -z)
 }
 
 process_mode "Falando"
 process_mode "Mudo"
+process_mode "Risadas"
 echo "processamento finalizado para $AVATAR" | tee -a "$LOG_FILE"

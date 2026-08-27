@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=720,height=1280,initial-scale=1,maximum-scale=1,user-scalable=no">
   <meta name="google" content="notranslate">
   <title>Boneco Game Renderer</title>
-  <link rel="stylesheet" href="/static/css/renderer.css?v=22">
+  <link rel="stylesheet" href="/static/css/renderer.css?v=23">
 </head>
 <body class="notranslate">
   <div id="stage">
+    <div id="cameraLayer">
     <canvas id="tunnelCanvas" width="360" height="640" aria-hidden="true"></canvas>
     <div id="skyLayer" class="skyLayer" aria-hidden="true">
       <div class="skyStars"></div>
@@ -29,6 +30,7 @@
       </div>
       <div id="mapFront"></div>
     </div>
+    </div>
     <div id="hud">
       <section id="messageCard" class="message-card" hidden>
         <div id="avatarRing" class="avatar-ring">
@@ -45,6 +47,6 @@
     <audio id="sceneAudio" preload="auto"></audio>
     <audio id="musicAudio" preload="auto" loop></audio>
   </div>
-  <script src="/static/js/renderer.js?v=51"></script>
+  <script src="/static/js/renderer.js?v=52"></script>
 </body>
 </html>

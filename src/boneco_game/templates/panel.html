@@ -15,6 +15,8 @@
       </div>
       <nav>
         <button id="liveToggleTop" class="live-toggle" type="button">Iniciar live</button>
+        <button id="backgroundRemovalTop" type="button">Processar fundos</button>
+        <button id="systemUpdateTop" type="button">Atualizar sistema</button>
         <button id="openScheduleModal" type="button">Programar live</button>
         <a href="/renderer" target="_blank">Prévia renderer</a>
         <a href="/map-editor" target="_blank">Editor de mapa</a>
@@ -221,6 +223,64 @@
       </article>
     </section>
   </main>
+
+  <dialog id="backgroundRemovalModal" class="modal background-removal-modal">
+    <div class="modal-card">
+      <header class="modal-head">
+        <div>
+          <strong>Remover fundo dos vídeos</strong>
+          <span>Processa somente vídeos pendentes em Falando/Mudo → FUNDO_VERDE.</span>
+        </div>
+        <button id="closeBackgroundRemovalModal" type="button">Fechar</button>
+      </header>
+
+      <section class="background-progress-card">
+        <div class="background-progress-head">
+          <strong id="backgroundRemovalSummary">Verificando vídeos pendentes...</strong>
+          <span id="backgroundRemovalPercent">0%</span>
+        </div>
+        <progress id="backgroundRemovalProgress" max="100" value="0"></progress>
+        <p id="backgroundRemovalCurrent">Aguardando...</p>
+      </section>
+
+      <pre id="backgroundRemovalLog" class="background-removal-log">Sem mensagens de processamento.</pre>
+
+      <footer class="modal-actions">
+        <button id="startBackgroundRemoval" type="button">Processar pendentes</button>
+        <button id="refreshBackgroundRemoval" type="button">Atualizar</button>
+      </footer>
+      <p class="modal-note">O processamento roda em segundo plano no servidor. Fechar esta janela não interrompe o vídeo atual.</p>
+    </div>
+  </dialog>
+
+
+  <dialog id="systemUpdateModal" class="modal system-update-modal">
+    <div class="modal-card">
+      <header class="modal-head">
+        <div><strong>Atualizar sistema</strong><span>Consulta e baixa atualizações versionadas no GitHub.</span></div>
+        <button id="closeSystemUpdateModal" type="button">Fechar</button>
+      </header>
+      <section class="system-update-status">
+        <div class="system-update-title-line">
+          <strong id="systemUpdateSummary">Aguardando consulta...</strong>
+          <span id="systemUpdateBadge" hidden>NOVA VERSÃO</span>
+        </div>
+        <p id="systemUpdateVersions">Instalada: — · GitHub: —</p>
+      </section>
+      <div class="system-update-columns">
+        <section><h3>Arquivos do GitHub</h3><pre id="systemUpdateFiles" class="system-update-list">Ainda não consultado.</pre></section>
+        <section><h3>Alterações locais</h3><pre id="systemUpdateLocalChanges" class="system-update-list">Ainda não consultado.</pre></section>
+      </div>
+      <pre id="systemUpdateOutput" class="system-update-output">Clique em Verificar atualização.</pre>
+      <footer class="modal-actions">
+        <button id="checkSystemUpdate" type="button">Verificar atualização</button>
+        <button id="applySystemUpdate" type="button" disabled>Atualizar agora</button>
+        <button id="restartSystem" type="button">Reiniciar sistema</button>
+      </footer>
+      <p class="modal-note">Usa git fetch + git pull --ff-only. Não faz merge automático nem reset --hard. Atualização e reinicialização ficam bloqueadas durante a live.</p>
+    </div>
+  </dialog>
+
   <dialog id="scheduleModal" class="modal">
     <form method="dialog" class="modal-card">
       <header class="modal-head">
@@ -333,6 +393,8 @@
       <pre id="scheduleStatus">Carregando...</pre>
     </form>
   </dialog>
+  <script src="/static/js/background_removal.js?v=1"></script>
+  <script src="/static/js/system_update.js?v=1"></script>
   <script src="/static/js/panel.js?v=11"></script>
 </body>
 </html>

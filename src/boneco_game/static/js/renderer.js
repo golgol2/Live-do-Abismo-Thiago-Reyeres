@@ -1407,6 +1407,12 @@ function actorLabel(actor) {
 }
 
 function showMessageCard(job) {
+  const source = String(job?.metadata?.source || "").trim().toLowerCase();
+  if (source === "manual") {
+    hideMessageCard();
+    return;
+  }
+
   const event = eventFromJob(job);
   const title = titleForJob(job);
   const text = cardTextForJob(job);

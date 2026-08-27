@@ -42,6 +42,83 @@ CHAT_IDENTITY_PROMPT = (
 )
 
 
+
+def generate_live_opening(*, max_chars: int = 600) -> str:
+    date_text, time_text = _live_datetime_words()
+    prompt = (
+        "Você é o Boneco do Abismo e está iniciando sua live. "
+        f"Hoje é {date_text}. Agora são {time_text}. "
+        "Faça uma abertura espontânea. Mencione naturalmente a data e a hora para mostrar que está ao vivo. "
+        "Responda somente com a fala."
+    )
+    try:
+        text = ask_text_ai(
+            prompt,
+            max_chars=max_chars,
+            purpose="live_opening",
+            timeout=22,
+            model_override=OPENAI_CHAT_NANO_MODEL,
+        )
+    except Exception as exc:
+        _write_ai_error(f"live_opening {type(exc).__name__}: {exc}")
+        text = f"Hoje é {date_text}, agora são {time_text}, e o Boneco do Abismo já está ao vivo. Vamos começar."
+    clean = _sanitize_ai_text(text, max_chars=max_chars)
+    if not clean or has_blocked_output_term(clean):
+        clean = f"Hoje é {date_text}, agora são {time_text}, e o Boneco do Abismo já está ao vivo. Vamos começar."
+    return clamp_text(clean, max_chars)
+
+
+def _live_datetime_words() -> tuple[str, str]:
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    except Exception:
+        now = datetime.now()
+
+    months = (
+        "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+        "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+    )
+    date_text = f"{_number_pt(now.day)} de {months[now.month - 1]} de {_number_pt(now.year)}"
+    hour = _number_pt(now.hour, feminine=True)
+    minute = _number_pt(now.minute)
+    hour_label = "hora" if now.hour == 1 else "horas"
+    minute_label = "minuto" if now.minute == 1 else "minutos"
+    time_text = f"{hour} {hour_label}" if now.minute == 0 else f"{hour} {hour_label} e {minute} {minute_label}"
+    return date_text, time_text
+
+
+def _number_pt(value: int, *, feminine: bool = False) -> str:
+    value = max(0, int(value))
+    units = ["zero", "uma" if feminine else "um", "duas" if feminine else "dois", "três", "quatro", "cinco", "seis", "sete", "oito", "nove"]
+    teens = {10: "dez", 11: "onze", 12: "doze", 13: "treze", 14: "quatorze", 15: "quinze", 16: "dezesseis", 17: "dezessete", 18: "dezoito", 19: "dezenove"}
+    tens = {20: "vinte", 30: "trinta", 40: "quarenta", 50: "cinquenta", 60: "sessenta", 70: "setenta", 80: "oitenta", 90: "noventa"}
+    hundreds = {100: "cem", 200: "duzentos", 300: "trezentos", 400: "quatrocentos", 500: "quinhentos", 600: "seiscentos", 700: "setecentos", 800: "oitocentos", 900: "novecentos"}
+    if value < 10:
+        return units[value]
+    if value < 20:
+        return teens[value]
+    if value < 100:
+        base = (value // 10) * 10
+        return tens[base] if value == base else f"{tens[base]} e {_number_pt(value - base, feminine=feminine)}"
+    if value < 1000:
+        base = (value // 100) * 100
+        if value == base:
+            return hundreds[base]
+        prefix = "cento" if base == 100 else hundreds[base]
+        return f"{prefix} e {_number_pt(value - base, feminine=feminine)}"
+    if value < 10000:
+        thousands = value // 1000
+        rest = value % 1000
+        prefix = "mil" if thousands == 1 else f"{_number_pt(thousands)} mil"
+        if not rest:
+            return prefix
+        connector = " e " if rest < 100 or rest % 100 == 0 else " "
+        return f"{prefix}{connector}{_number_pt(rest, feminine=feminine)}"
+    return str(value)
+
+
 def generate_chat_reply(
     username: str,
     message: str,

@@ -70,8 +70,22 @@ def push_gift(
     return event
 
 
-def push_system(text: str, *, priority: int = 50, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
-    event = _event("system", username="", display_name="", text=text, priority=priority, metadata=metadata)
+def push_system(
+    text: str,
+    *,
+    priority: int = 50,
+    username: str = "",
+    display_name: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    event = _event(
+        "system",
+        username=username,
+        display_name=display_name,
+        text=text,
+        priority=priority,
+        metadata=metadata,
+    )
     queue = _read_list(SYSTEM_QUEUE_FILE)
     queue.append(event)
     queue.sort(key=lambda item: (-int(item.get("priority") or 0), float(item.get("created_at") or 0)))

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_DIR="/media/allana/Dados240/BONECO_GAME"
+PROJECT_DIR="${BONECO_GAME_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 PYTHON_BIN="$PROJECT_DIR/.venv/bin/python"
 HOST="${BONECO_GAME_HOST:-127.0.0.1}"
 PORT="${BONECO_GAME_PORT:-9292}"

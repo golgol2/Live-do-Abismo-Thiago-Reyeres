@@ -6,11 +6,13 @@ import os
 import subprocess
 import threading
 import time
+import random
 from typing import Any
 
 from boneco_game.core.json_store import read_json, write_json_atomic
 from boneco_game.core.settings import MONITOR_NETWORK_FILE, MONITOR_START_SCRIPT, MONITOR_STATUS_FILE, PROJECT_DIR
 from boneco_game.services import live_events
+from boneco_game.services.live_text import display_name as sanitize_display_name
 
 try:
     import socketio as socketio_client
@@ -22,6 +24,14 @@ _LOCK = threading.Lock()
 _THREAD: threading.Thread | None = None
 _STOP = threading.Event()
 _CLIENT: Any = None
+WELCOME_VIEWER_LIMIT = 20
+WELCOME_COOLDOWN_SECONDS = 9.0
+WELCOME_PRIORITY = 100
+WELCOME_PHRASES_FILE = PROJECT_DIR / "config" / "member_welcome_phrases.txt"
+_WELCOMED_USERS: set[str] = set()
+_LAST_WELCOME_AT = 0.0
+_RECENT_WELCOME_PHRASES: list[str] = []
+_PROFILE_CACHE: dict[str, str] = {}
 _STATE: dict[str, Any] = {
     "running": False,
     "connected": False,
@@ -32,15 +42,25 @@ _STATE: dict[str, Any] = {
     "last_event": "",
     "counters": {},
     "viewer_count": 0,
+    "viewer_count_known": False,
+    "welcome_count": 0,
 }
 
 
 def start_monitor(username: str, *, server_url: str = "http://127.0.0.1:2618") -> dict[str, Any]:
-    global _THREAD
+    global _THREAD, _LAST_WELCOME_AT
     username = str(username or "").strip().lstrip("@")
     if not username:
         _update(running=False, last_error="Usuario TikTok vazio.")
         return status()
+    with _LOCK:
+        _WELCOMED_USERS.clear()
+        _RECENT_WELCOME_PHRASES.clear()
+        _PROFILE_CACHE.clear()
+        _LAST_WELCOME_AT = 0.0
+        _STATE["viewer_count"] = 0
+        _STATE["viewer_count_known"] = False
+        _STATE["welcome_count"] = 0
     with _LOCK:
         alive = bool(_THREAD and _THREAD.is_alive())
     if alive:
@@ -128,7 +148,12 @@ def _register_handlers(client: Any, username: str) -> None:
         user = _username(data)
         display = _display_name(data)
         if text and user:
-            live_events.push_comment(user, text, display_name=display, metadata={"raw": _small_raw(data), "source": "tiktok"})
+            live_events.push_comment(
+                user,
+                text,
+                display_name=display,
+                metadata=_event_metadata(data, user),
+            )
             _count("chat")
             _update(last_event=f"chat {time.strftime('%H:%M:%S')}", last_error="")
 
@@ -140,23 +165,144 @@ def _register_handlers(client: Any, username: str) -> None:
         display = _display_name(data)
         count = _gift_count(data)
         if gift_name and user:
-            live_events.push_gift(user, gift_name, count=count, display_name=display, metadata={"raw": _small_raw(data), "source": "tiktok"})
+            live_events.push_gift(
+                user,
+                gift_name,
+                count=count,
+                display_name=display,
+                metadata=_event_metadata(data, user),
+            )
             _count("gift")
             _update(last_event=f"gift {time.strftime('%H:%M:%S')}", last_error="")
+
+    @client.on("data-member")
+    def on_member(raw: object) -> None:
+        data = _parse_payload(raw)
+        user = _username(data)
+        display = _display_name(data)
+        metadata = _event_metadata(data, user) if user else {"raw": _small_raw(data), "source": "tiktok"}
+        profile = str(metadata.get("profile_image") or "").strip()
+        _count("member")
+        _update(last_event=f"member {time.strftime('%H:%M:%S')}", last_error="")
+        if user:
+            _maybe_welcome_member(user, display or user, profile)
 
     @client.on("data-viewer")
     def on_viewer(raw: object) -> None:
         data = _parse_payload(raw)
         count = _viewer_count(data)
         if count is not None:
-            _update(viewer_count=count, last_event=f"viewer {time.strftime('%H:%M:%S')}")
+            _update(viewer_count=count, viewer_count_known=True, last_event=f"viewer {time.strftime('%H:%M:%S')}")
 
     @client.on("data-roomInfo")
     def on_room_info(raw: object) -> None:
         data = _parse_payload(raw)
         count = _viewer_count(data)
         if count is not None:
-            _update(viewer_count=count, last_event=f"roomInfo {time.strftime('%H:%M:%S')}")
+            _update(viewer_count=count, viewer_count_known=True, last_event=f"roomInfo {time.strftime('%H:%M:%S')}")
+
+
+
+def _event_metadata(data: dict[str, Any], username: str) -> dict[str, Any]:
+    key = str(username or "").strip().casefold()
+    raw = _small_raw(data)
+    profile = _profile_image_url(data)
+    if profile and key:
+        _PROFILE_CACHE[key] = profile
+    elif key:
+        profile = str(_PROFILE_CACHE.get(key) or "").strip()
+    if profile:
+        raw["profile_image"] = profile
+        raw["profile_image_url"] = profile
+    return {
+        "raw": raw,
+        "source": "tiktok",
+        "profile_image": profile,
+        "profile_image_url": profile,
+    }
+
+
+def _maybe_welcome_member(username: str, raw_display_name: str, profile_image: str = "") -> None:
+    global _LAST_WELCOME_AT
+
+    key = str(username or "").strip().casefold()
+    name = sanitize_display_name(raw_display_name or username, fallback="visitante")
+    if not key or not name:
+        return
+
+    with _LOCK:
+        viewer_known = bool(_STATE.get("viewer_count_known"))
+        viewer_count = int(_STATE.get("viewer_count") or 0)
+        already_welcomed = key in _WELCOMED_USERS
+        cooldown_ok = (time.time() - _LAST_WELCOME_AT) >= WELCOME_COOLDOWN_SECONDS
+
+    if not viewer_known:
+        return
+    if viewer_count >= WELCOME_VIEWER_LIMIT:
+        return
+    if already_welcomed or not cooldown_ok:
+        return
+
+    phrase = _choose_welcome_phrase(name)
+    if not phrase:
+        return
+
+    with _LOCK:
+        if key in _WELCOMED_USERS:
+            return
+        _WELCOMED_USERS.add(key)
+        _LAST_WELCOME_AT = time.time()
+        _STATE["welcome_count"] = int(_STATE.get("welcome_count") or 0) + 1
+        welcome_count = int(_STATE["welcome_count"])
+
+    live_events.push_system(
+        phrase,
+        priority=WELCOME_PRIORITY,
+        username=username,
+        display_name=name,
+        metadata={
+            "source": "tiktok_member",
+            "username": username,
+            "display_name": name,
+            "profile_image": str(profile_image or "").strip(),
+            "profile_image_url": str(profile_image or "").strip(),
+            "viewer_count": viewer_count,
+        },
+    )
+    _count("welcome")
+    _update(
+        last_event=f"welcome {time.strftime('%H:%M:%S')}",
+        last_error="",
+        welcome_count=welcome_count,
+        last_welcome_user=username,
+        last_welcome_name=name,
+        last_welcome_at=time.time(),
+    )
+
+
+def _choose_welcome_phrase(name: str) -> str:
+    try:
+        raw_lines = WELCOME_PHRASES_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        raw_lines = []
+
+    phrases = [
+        line.strip()
+        for line in raw_lines
+        if line.strip() and not line.lstrip().startswith("#") and "{nome}" in line
+    ]
+    if not phrases:
+        phrases = ["Oi, {nome}!", "E aí, {nome}?", "Como vai, {nome}?"]
+
+    with _LOCK:
+        candidates = [item for item in phrases if item not in _RECENT_WELCOME_PHRASES]
+        template = random.choice(candidates or phrases)
+        _RECENT_WELCOME_PHRASES.append(template)
+        max_recent = max(1, min(8, len(phrases) - 1))
+        del _RECENT_WELCOME_PHRASES[:-max_recent]
+
+    safe_name = name[:60].strip(" ,.;:")
+    return template.replace("{nome}", safe_name).strip()
 
 
 def _ensure_node_monitor() -> None:

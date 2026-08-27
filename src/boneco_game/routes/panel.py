@@ -6,7 +6,10 @@ from fastapi.templating import Jinja2Templates
 
 from boneco_game.core.settings import TEMPLATES_DIR
 from boneco_game.services import live_events
+from boneco_game.services.system_update import schedule_restart as schedule_system_restart, status as system_update_status, update as apply_system_update
+from boneco_game.services.background_removal import start as start_background_removal, status as background_removal_status
 from boneco_game.services.event_decision_worker import status as decision_worker_status
+from boneco_game.services.live_health import run_check_once as live_health_check, status as live_health_status
 from boneco_game.services.live_control import (
     public_live_config,
     save_live_config,
@@ -47,7 +50,20 @@ def api_status() -> JSONResponse:
         "renderer_window": renderer_window_status(),
         "transmission": transmission_status(),
         "live": live,
+        "health": live_health_status(),
+        "background_removal": background_removal_status(),
     })
+
+
+
+@router.get("/api/live/health", response_class=JSONResponse)
+def api_live_health() -> JSONResponse:
+    return JSONResponse(live_health_status())
+
+
+@router.post("/api/live/health/check", response_class=JSONResponse)
+def api_live_health_check() -> JSONResponse:
+    return JSONResponse(live_health_check(allow_recovery=False))
 
 
 @router.post("/api/state", response_class=JSONResponse)
@@ -95,6 +111,52 @@ async def api_live_start(request: Request) -> JSONResponse:
 @router.post("/api/live/stop", response_class=JSONResponse)
 def api_live_stop() -> JSONResponse:
     return JSONResponse(stop_live())
+
+
+@router.get("/api/background-removal/status", response_class=JSONResponse)
+def api_background_removal_status() -> JSONResponse:
+    return JSONResponse(background_removal_status())
+
+
+@router.post("/api/background-removal/start", response_class=JSONResponse)
+async def api_background_removal_start(request: Request) -> JSONResponse:
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        payload = {}
+    avatar = str(payload.get("avatar") or "BONECO_MAPA_2D").strip()
+    force = bool(payload.get("force"))
+    try:
+        result = start_background_removal(avatar, force=force)
+    except (ValueError, OSError) as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    status_code = 200 if result.get("ok") is not False else 409
+    return JSONResponse(result, status_code=status_code)
+
+
+
+@router.get("/api/system-update/status", response_class=JSONResponse)
+def api_system_update_status(fetch_remote: int = 0) -> JSONResponse:
+    return JSONResponse(system_update_status(fetch=bool(fetch_remote)))
+
+
+@router.post("/api/system-update/apply", response_class=JSONResponse)
+def api_system_update_apply() -> JSONResponse:
+    live = live_status()
+    transmission = transmission_status()
+    if bool(live.get("running")) or bool(transmission.get("running")):
+        return JSONResponse({"ok": False, "error": "A live está ativa. Pare a transmissão antes de atualizar."}, status_code=409)
+    result = apply_system_update()
+    return JSONResponse(result, status_code=200 if result.get("ok") else 409)
+
+
+@router.post("/api/system-update/restart", response_class=JSONResponse)
+def api_system_update_restart() -> JSONResponse:
+    live = live_status()
+    transmission = transmission_status()
+    if bool(live.get("running")) or bool(transmission.get("running")):
+        return JSONResponse({"ok": False, "error": "A live está ativa. Pare a transmissão antes de reiniciar."}, status_code=409)
+    result = schedule_system_restart()
+    return JSONResponse(result, status_code=200 if result.get("ok") else 500)
 
 
 @router.post("/api/events/comment", response_class=JSONResponse)

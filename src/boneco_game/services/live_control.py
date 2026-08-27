@@ -10,7 +10,9 @@ from boneco_game.services.credentials import StreamlabsCredentialProvider, end_s
 from boneco_game.services.renderer_window import restart_renderer_window, status as renderer_window_status
 from boneco_game.services.runtime_state import update_state
 from boneco_game.services.live_events import reset_event_state
-from boneco_game.services.speech_queue import reset_speech_queues
+from boneco_game.services.speech_queue import push_ready, reset_speech_queues
+from boneco_game.services.text_ai import generate_live_opening
+from boneco_game.services.tts_service import synthesize_for_job
 from boneco_game.services.tiktok_monitor import start_monitor, status as monitor_status, stop_monitor
 from boneco_game.services.transmission import start_transmission, status as transmission_status, stop_transmission
 
@@ -92,6 +94,13 @@ def start_live(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     reset_event_state()
     reset_speech_queues()
 
+    _write_status({"state": "preparing_opening", "running": False, "message": "Gerando abertura e aquecendo TTS.", "updated_at": time.time()})
+    try:
+        opening = _prepare_live_opening()
+    except Exception as exc:
+        reset_speech_queues()
+        return _result(False, "error", f"Falha ao preparar abertura da live: {exc}", config, opening={"prepared": False, "error": str(exc)})
+
     mode = "battle" if config.get("mode") == "battle" else "normal"
     update_state(
         mode=mode,
@@ -143,7 +152,7 @@ def start_live(payload: dict[str, Any] | None = None) -> dict[str, Any]:
             str(config.get("username") or "").strip(),
             server_url=str(config.get("monitor_server") or "http://127.0.0.1:2618").strip(),
         )
-        return _result(True, "running", "Live HDMI/Live Studio iniciada.", config, monitor=monitor, renderer=renderer, transport="local")
+        return _result(True, "running", "Live HDMI/Live Studio iniciada com abertura preparada.", config, monitor=monitor, renderer=renderer, opening=opening, transport="local")
 
     transmission = start_transmission(
         rtmp_url=rtmp_url,
@@ -177,7 +186,7 @@ def start_live(payload: dict[str, Any] | None = None) -> dict[str, Any]:
         str(config.get("username") or "").strip(),
         server_url=str(config.get("monitor_server") or "http://127.0.0.1:2618").strip(),
     )
-    return _result(True, "running", "Live iniciada.", config, monitor=monitor, transmission=transmission, streamlabs=streamlabs_info, transport="direct")
+    return _result(True, "running", "Live iniciada com abertura preparada.", config, monitor=monitor, transmission=transmission, streamlabs=streamlabs_info, opening=opening, transport="direct")
 
 
 def stop_live() -> dict[str, Any]:
@@ -302,6 +311,7 @@ def _result(
     transmission: dict[str, Any] | None = None,
     renderer: dict[str, Any] | None = None,
     streamlabs: dict[str, Any] | None = None,
+    opening: dict[str, Any] | None = None,
     transport: str = "",
 ) -> dict[str, Any]:
     payload = {
@@ -321,7 +331,44 @@ def _result(
             "transmission": transmission or transmission_status(),
             "renderer_window": renderer or renderer_window_status(),
             "streamlabs": streamlabs or {},
+            "opening": opening or {},
         },
+    }
+
+
+
+def _prepare_live_opening() -> dict[str, Any]:
+    import uuid
+
+    started_at = time.time()
+    text = generate_live_opening(max_chars=600)
+    speech = synthesize_for_job(text)
+    job = {
+        "id": uuid.uuid4().hex,
+        "actor": "main",
+        "text": text,
+        "audio_path": str(speech.get("audio_path") or ""),
+        "timeline_path": str(speech.get("timeline_path") or ""),
+        "timeline": speech.get("timeline") or {},
+        "priority": 120,
+        "metadata": {
+            "source": "live_opening",
+            "created_at": started_at,
+            "prepared_at": time.time(),
+            "chunks": speech.get("chunks") or [],
+            "tts_input": speech.get("tts_input") or text,
+            "voice_speed": speech.get("voice_speed"),
+            "voice_pitch": speech.get("voice_pitch"),
+        },
+    }
+    push_ready(job)
+    return {
+        "prepared": True,
+        "text": text,
+        "audio_path": job["audio_path"],
+        "timeline_path": job["timeline_path"],
+        "chunks": job["metadata"]["chunks"],
+        "prepare_seconds": round(time.time() - started_at, 3),
     }
 
 

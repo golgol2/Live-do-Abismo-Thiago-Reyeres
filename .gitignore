@@ -31,3 +31,7 @@ private/
 *.mpeg
 *.mpg
 *.zip
+
+# Arquivos locais de manutenção
+*.bak-*
+aplicar_*.py

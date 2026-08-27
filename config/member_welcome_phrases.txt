@@ -1,0 +1,14 @@
+Oi {nome}, tudo bem?
+Como vai, {nome}?
+E aí, {nome}?
+Oi, {nome}!
+Que bom que você entrou, {nome}.
+Olha quem apareceu, {nome}!
+Chega mais, {nome}.
+Tudo certo, {nome}?
+Fala, {nome}!
+Opa, {nome}, tudo tranquilo?
+{nome}, que bom te ver por aqui.
+{nome}, chegou na hora certa.
+Olha só, {nome} apareceu por aqui.
+E aí, {nome}, como estão as coisas?

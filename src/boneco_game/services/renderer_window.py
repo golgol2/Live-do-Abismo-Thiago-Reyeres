@@ -176,7 +176,15 @@ def _pid_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
-    return True
+    return _pid_state(pid) != "Z"
+
+
+def _pid_state(pid: int) -> str:
+    try:
+        parts = Path(f"/proc/{pid}/stat").read_text().split()
+    except OSError:
+        return ""
+    return parts[2] if len(parts) > 2 else ""
 
 
 def _state(**overrides: Any) -> dict[str, Any]:

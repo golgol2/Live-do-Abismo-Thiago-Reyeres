@@ -73,6 +73,16 @@ kill_port() {
   fi
 }
 
+cleanup_live_audio_modules() {
+  command -v pactl >/dev/null 2>&1 || return 0
+  pactl list short modules 2>/dev/null | \
+    awk -F '\t' '$0 ~ /module-null-sink/ && $0 ~ /sink_name=tiktok_live_pygame/ {print $1}' | \
+    while read -r module_id; do
+      [[ "$module_id" =~ ^[0-9]+$ ]] || continue
+      pactl unload-module "$module_id" >/dev/null 2>&1 || true
+    done
+}
+
 kill_port_hard() {
   local port="$1"
   if command -v fuser >/dev/null 2>&1; then
@@ -128,6 +138,7 @@ kill_pattern_hard "$PROJECT_DIR/runs/chrome_renderer_profile"
 kill_pattern_hard "$PROJECT_DIR/external/tiktok-live-monitoring-server"
 kill_port_hard "$PORT"
 kill_port_hard "$MONITOR_PORT"
+cleanup_live_audio_modules
 
 find "$PROJECT_DIR/runs" -maxdepth 1 -name '*.pid' -type f -delete 2>/dev/null || true
 

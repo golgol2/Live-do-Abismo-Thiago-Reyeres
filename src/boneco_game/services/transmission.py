@@ -10,7 +10,7 @@ from typing import Any
 
 from boneco_game.core.json_store import read_json, write_json_atomic
 from boneco_game.core.settings import DEFAULT_HOST, DEFAULT_PORT, PROJECT_DIR, RUNS_DIR
-from boneco_game.services.audio_routing import ensure_live_audio_sink, player_sink_for_audio_source
+from boneco_game.services.audio_routing import ensure_live_audio_sink, player_sink_for_audio_source, remove_live_audio_sink, reset_live_audio_sink
 from boneco_game.services.renderer_window import restart_renderer_window, stop_renderer_window
 
 
@@ -45,14 +45,18 @@ def start_transmission(
     requested_audio_source = str(audio_source or "").strip()
     player_audio_sink = ""
     pulse_module_id = ""
-    if requested_audio_source:
-        audio_source = requested_audio_source
-        player_audio_sink = player_sink_for_audio_source(audio_source)
-    else:
-        audio_source, player_audio_sink, pulse_module_id = ensure_live_audio_sink()
+    project_audio_requested = (
+        not requested_audio_source
+        or requested_audio_source == "tiktok_live_pygame.monitor"
+    )
+    if project_audio_requested:
+        audio_source, player_audio_sink, pulse_module_id = reset_live_audio_sink()
         if not audio_source:
             audio_source = detect_default_monitor_source()
             player_audio_sink = player_sink_for_audio_source(audio_source)
+    else:
+        audio_source = requested_audio_source
+        player_audio_sink = player_sink_for_audio_source(audio_source)
     if not audio_source:
         return _write_status(running=False, last_error="Nenhuma fonte .monitor encontrada para capturar audio.")
 
@@ -208,6 +212,8 @@ def stop_transmission() -> dict[str, Any]:
     stop_renderer_window()
     virtual_pid = int(current.get("virtual_pid") or 0) if isinstance(current, dict) else 0
     _stop_virtual_display_pid(virtual_pid)
+    _reap_child_pid(pid)
+    remove_live_audio_sink()
     return _write_status(running=False, last_error="Transmissao parada.")
 
 

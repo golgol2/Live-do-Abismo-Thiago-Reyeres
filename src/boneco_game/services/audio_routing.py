@@ -42,6 +42,43 @@ def ensure_live_audio_sink() -> tuple[str, str, str]:
     return "", "", ""
 
 
+
+def remove_live_audio_sink() -> list[str]:
+    """Remove todos os module-null-sink do projeto para evitar estado residual entre lives."""
+    removed: list[str] = []
+    output = _pactl_stdout(["list", "short", "modules"])
+    for line in output.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        module_id = parts[0].strip()
+        description = "\t".join(parts[1:])
+        if (
+            "module-null-sink" not in description
+            or f"sink_name={LIVE_AUDIO_SINK}" not in description
+        ):
+            continue
+        result = subprocess.run(
+            ["pactl", "unload-module", module_id],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            removed.append(module_id)
+    return removed
+
+
+def reset_live_audio_sink() -> tuple[str, str, str]:
+    """Recria o sink de áudio da live para começar cada transmissão com estado limpo."""
+    remove_live_audio_sink()
+    deadline = time.monotonic() + 1.5
+    while time.monotonic() < deadline:
+        if LIVE_AUDIO_MONITOR not in list_pulse_sources():
+            break
+        time.sleep(0.05)
+    return ensure_live_audio_sink()
+
 def player_sink_for_audio_source(audio_source: str) -> str:
     return LIVE_AUDIO_SINK if str(audio_source or "").strip() == LIVE_AUDIO_MONITOR else ""
 

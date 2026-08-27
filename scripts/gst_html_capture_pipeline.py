@@ -61,6 +61,7 @@ def run_pipeline(args: argparse.Namespace) -> tuple[bool, bool]:
     signal.signal(signal.SIGINT, stop)
 
     pipeline.set_state(Gst.State.PLAYING)
+    install_pipeline_diagnostics(pipeline, state)
     try:
         loop.run()
     finally:
@@ -88,6 +89,56 @@ def run_pipeline(args: argparse.Namespace) -> tuple[bool, bool]:
     return bool(state.get("error")), bool(state.get("stopping"))
 
 
+
+def install_pipeline_diagnostics(pipeline: Gst.Pipeline, state: dict[str, bool]) -> None:
+    state["clock_logged"] = False
+
+    def tick() -> bool:
+        if state.get("stopping"):
+            return False
+
+        clock = pipeline.get_clock()
+        clock_name = clock.get_name() if clock is not None else "none"
+
+        if not state.get("clock_logged"):
+            state["clock_logged"] = True
+            print(
+                f"[html-capture] pipeline clock={clock_name} base_time={pipeline.get_base_time()}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+        queue_parts: list[str] = []
+        for name in (
+            "video_in_q",
+            "video_post_comp_q",
+            "audio_in_q",
+            "audio_mux_q",
+            "rtmp_out_q",
+            "file_out_q",
+        ):
+            element = pipeline.get_by_name(name)
+            if element is None:
+                continue
+            try:
+                buffers = int(element.get_property("current-level-buffers"))
+                level_time = int(element.get_property("current-level-time"))
+            except Exception:
+                continue
+            queue_parts.append(
+                f"{name}:buffers={buffers},ms={level_time / 1_000_000:.1f}"
+            )
+
+        if queue_parts:
+            print(
+                "[html-capture] queues " + " | ".join(queue_parts),
+                file=sys.stderr,
+                flush=True,
+            )
+        return True
+
+    GLib.timeout_add_seconds(1, tick)
+
 def build_pipeline(args: argparse.Namespace) -> str:
     bitrate = max(300, min(12000, int(args.video_bitrate)))
     return " ".join([
@@ -108,6 +159,7 @@ def video_branch(args: argparse.Namespace, bitrate: int) -> list[str]:
         f"video/x-raw,framerate={FPS}/1",
         "!",
         "queue",
+        "name=video_in_q",
         "leaky=downstream",
         "max-size-buffers=2",
         "!",
@@ -127,6 +179,7 @@ def video_branch(args: argparse.Namespace, bitrate: int) -> list[str]:
         "sink_0::zorder=0",
         "!",
         "queue",
+        "name=video_post_comp_q",
         "leaky=downstream",
         "max-size-buffers=2",
         "max-size-time=0",
@@ -188,12 +241,17 @@ def audio_branch(args: argparse.Namespace) -> list[str]:
         f"device={gst_quote(args.audio_source)}",
         "!",
         "queue",
-        "leaky=downstream",
-        "max-size-buffers=8",
+        "name=audio_in_q",
+        "max-size-buffers=0",
+        "max-size-bytes=0",
+        "max-size-time=2000000000",
         "!",
         "audioconvert",
         "!",
         "audioresample",
+        "!",
+        "audiorate",
+        "skip-to-first=true",
         "!",
         "audio/x-raw,rate=44100,channels=2",
         "!",
@@ -208,15 +266,29 @@ def audio_branch(args: argparse.Namespace) -> list[str]:
         "aacparse",
         "!",
         "queue",
+        "name=audio_mux_q",
+        "max-size-buffers=0",
+        "max-size-bytes=0",
+        "max-size-time=2000000000",
         "!",
         "mux.",
     ]
 
-
 def output_branch(args: argparse.Namespace) -> list[str]:
     base = ["flvmux", "name=mux", "streamable=true", "!"]
     if args.output_file:
-        return [*base, "filesink", f"location={gst_quote(args.output_file)}", "sync=false"]
+        return [
+            *base,
+            "queue",
+            "name=file_out_q",
+            "max-size-buffers=0",
+            "max-size-bytes=0",
+            "max-size-time=2000000000",
+            "!",
+            "filesink",
+            f"location={gst_quote(args.output_file)}",
+            "sync=true",
+        ]
     if not args.rtmp_url:
         raise RuntimeError("rtmp-url vazio e output-file vazio.")
     if args.rtmp_sink == "ffmpeg":
@@ -224,30 +296,29 @@ def output_branch(args: argparse.Namespace) -> list[str]:
         return [
             *base,
             "queue",
-            "leaky=downstream",
-            "max-size-buffers=8",
-            "max-size-time=0",
+            "name=rtmp_out_q",
+            "max-size-buffers=0",
             "max-size-bytes=0",
+            "max-size-time=2000000000",
             "!",
             "fdsink",
             f"fd={fd}",
-            "sync=false",
+            "sync=true",
         ]
     sink = "rtmp2sink" if args.rtmp_sink == "rtmp2sink" else "rtmpsink"
     return [
         *base,
         "queue",
-        "leaky=downstream",
-        "max-size-buffers=8",
-        "max-size-time=0",
+        "name=rtmp_out_q",
+        "max-size-buffers=0",
         "max-size-bytes=0",
+        "max-size-time=2000000000",
         "!",
         sink,
         f"location={gst_quote(args.rtmp_url)}",
-        "sync=false",
+        "sync=true",
         "async=false",
     ]
-
 
 def on_bus_message(_bus: Gst.Bus, message: Gst.Message, loop: GLib.MainLoop, state: dict[str, bool]) -> None:
     if message.type == Gst.MessageType.ERROR:
@@ -260,6 +331,16 @@ def on_bus_message(_bus: Gst.Bus, message: Gst.Message, loop: GLib.MainLoop, sta
     elif message.type == Gst.MessageType.WARNING:
         err, debug = message.parse_warning()
         print(f"[html-capture] aviso GStreamer: {err} {debug or ''}", file=sys.stderr, flush=True)
+    elif message.type == Gst.MessageType.QOS:
+        try:
+            live, running_time, stream_time, timestamp, duration = message.parse_qos()
+            print(
+                f"[html-capture] QOS live={live} running={running_time} stream={stream_time} ts={timestamp} duration={duration}",
+                file=sys.stderr,
+                flush=True,
+            )
+        except Exception as exc:
+            print(f"[html-capture] QOS parse failed: {exc}", file=sys.stderr, flush=True)
     elif message.type == Gst.MessageType.ELEMENT:
         structure = message.get_structure()
         if structure is not None and structure.get_name() == "level":

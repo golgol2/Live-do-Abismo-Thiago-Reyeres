@@ -8,21 +8,25 @@ from typing import Any
 from boneco_game.core.json_store import read_json, write_json_atomic
 from boneco_game.core.settings import RUNS_DIR
 from boneco_game.models import MicroSegment, SpeechJob
-from boneco_game.services.tts_service import PREPARED_AUDIO_DIR, synthesize_for_job
+from boneco_game.services.tts_service import PREPARED_AUDIO_DIR, safe_tts_chunks, synthesize_for_job
 
 
 PENDING_QUEUE_FILE = RUNS_DIR / "speech_pending_queue.json"
 READY_QUEUE_FILE = RUNS_DIR / "speech_ready_queue.json"
 WORKER_STATUS_FILE = RUNS_DIR / "tts_worker_status.json"
 QUEUE_RESET_FILE = RUNS_DIR / "speech_queue_reset.json"
+MANUAL_SEQUENCE_FILE = RUNS_DIR / "speech_manual_sequence.json"
 READY_JOB_MAX_AGE_SECONDS = 90.0
 PENDING_JOB_MAX_AGE_SECONDS = 120.0
+MANUAL_SEQUENCE_MAX_CHARS = 150
+MANUAL_SEQUENCE_PREFETCH = 2
 
 
 def reset_speech_queues() -> None:
     write_json_atomic(QUEUE_RESET_FILE, {"reset_at": time.time()})
     write_json_atomic(PENDING_QUEUE_FILE, [])
     write_json_atomic(READY_QUEUE_FILE, [])
+    write_json_atomic(MANUAL_SEQUENCE_FILE, {"active": False, "reset_at": time.time()})
     cleanup_prepared_speech_files()
 
 
@@ -71,11 +75,222 @@ def enqueue_text(
     return job
 
 
+def enqueue_manual_sequence(
+    text: str,
+    *,
+    actor: str = "main",
+    priority: int = 90,
+) -> dict[str, Any]:
+    chunks = safe_tts_chunks(
+        str(text or ""),
+        max_chars=MANUAL_SEQUENCE_MAX_CHARS,
+    )
+    chunks = [
+        str(chunk).strip()
+        for chunk in chunks
+        if str(chunk or "").strip()
+    ]
+    if not chunks:
+        raise ValueError("Texto vazio.")
+
+    current = _read_manual_sequence()
+    if bool(current.get("active")):
+        raise RuntimeError("Já existe uma leitura manual em andamento.")
+
+    now = time.time()
+    state: dict[str, Any] = {
+        "id": uuid.uuid4().hex,
+        "active": True,
+        "actor": actor if actor in {"main", "dj", "oracle", "guest", "user"} else "main",
+        "priority": int(priority),
+        "chunks": chunks,
+        "next_enqueue_index": 0,
+        "last_finished_index": -1,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    write_json_atomic(MANUAL_SEQUENCE_FILE, state)
+    _fill_manual_sequence_window(state)
+    write_json_atomic(MANUAL_SEQUENCE_FILE, state)
+    return _public_manual_sequence(state)
+
+
+def manual_sequence_status() -> dict[str, Any]:
+    return _public_manual_sequence(_read_manual_sequence())
+
+
+def acknowledge_speech_finished(
+    job_id: str,
+    *,
+    sequence_id: str = "",
+    sequence_index: int | None = None,
+) -> dict[str, Any]:
+    state = _read_manual_sequence()
+
+    if not bool(state.get("active")):
+        return {
+            "ok": True,
+            "manual_sequence": _public_manual_sequence(state),
+        }
+
+    active_id = str(state.get("id") or "")
+    if not sequence_id or sequence_id != active_id:
+        return {
+            "ok": True,
+            "manual_sequence": _public_manual_sequence(state),
+        }
+
+    try:
+        index = int(sequence_index if sequence_index is not None else -1)
+    except (TypeError, ValueError):
+        index = -1
+
+    chunks = state.get("chunks")
+    chunks = chunks if isinstance(chunks, list) else []
+
+    if index < 0 or index >= len(chunks):
+        return {
+            "ok": False,
+            "error": "Índice inválido da sequência manual.",
+            "manual_sequence": _public_manual_sequence(state),
+        }
+
+    last_finished = int(
+        state.get("last_finished_index")
+        if state.get("last_finished_index") is not None
+        else -1
+    )
+
+    if index > last_finished:
+        state["last_finished_index"] = index
+        state["last_finished_job_id"] = str(job_id or "")
+        state["last_finished_at"] = time.time()
+        state["updated_at"] = time.time()
+
+    if index >= len(chunks) - 1:
+        state["active"] = False
+        state["completed_at"] = time.time()
+        state["updated_at"] = time.time()
+    else:
+        _fill_manual_sequence_window(state)
+
+    write_json_atomic(MANUAL_SEQUENCE_FILE, state)
+
+    return {
+        "ok": True,
+        "manual_sequence": _public_manual_sequence(state),
+    }
+
+
+def _read_manual_sequence() -> dict[str, Any]:
+    payload = read_json(MANUAL_SEQUENCE_FILE, {"active": False})
+    return payload if isinstance(payload, dict) else {"active": False}
+
+
+def _public_manual_sequence(state: dict[str, Any]) -> dict[str, Any]:
+    chunks = state.get("chunks")
+    chunks = chunks if isinstance(chunks, list) else []
+
+    return {
+        "id": str(state.get("id") or ""),
+        "active": bool(state.get("active")),
+        "chunk_count": len(chunks),
+        "next_enqueue_index": int(state.get("next_enqueue_index") or 0),
+        "last_finished_index": int(
+            state.get("last_finished_index")
+            if state.get("last_finished_index") is not None
+            else -1
+        ),
+        "created_at": float(state.get("created_at") or 0),
+        "updated_at": float(state.get("updated_at") or 0),
+        "completed_at": float(state.get("completed_at") or 0),
+    }
+
+
+def _manual_job_matches(job: dict[str, Any], sequence_id: str) -> bool:
+    metadata = (
+        job.get("metadata")
+        if isinstance(job.get("metadata"), dict)
+        else {}
+    )
+    return (
+        str(metadata.get("source") or "") == "manual"
+        and str(metadata.get("manual_sequence_id") or "") == sequence_id
+    )
+
+
+def _fill_manual_sequence_window(state: dict[str, Any]) -> None:
+    chunks = state.get("chunks")
+    chunks = chunks if isinstance(chunks, list) else []
+
+    if not chunks or not bool(state.get("active")):
+        return
+
+    last_finished = int(
+        state.get("last_finished_index")
+        if state.get("last_finished_index") is not None
+        else -1
+    )
+    next_index = int(state.get("next_enqueue_index") or 0)
+
+    target_exclusive = min(
+        len(chunks),
+        last_finished + 1 + MANUAL_SEQUENCE_PREFETCH,
+    )
+
+    while next_index < target_exclusive:
+        enqueue_text(
+            str(chunks[next_index]),
+            actor=str(state.get("actor") or "main"),
+            priority=int(state.get("priority") or 90),
+            metadata={
+                "source": "manual",
+                "manual_sequence_id": str(state.get("id") or ""),
+                "manual_sequence_index": next_index,
+                "manual_sequence_part": next_index + 1,
+                "manual_sequence_total": len(chunks),
+                "manual_sequence_last": next_index == len(chunks) - 1,
+            },
+        )
+        next_index += 1
+        state["next_enqueue_index"] = next_index
+        state["updated_at"] = time.time()
+
+
 def pop_pending() -> dict[str, Any] | None:
     queue = _pruned_queue(PENDING_QUEUE_FILE, max_age=PENDING_JOB_MAX_AGE_SECONDS)
     if not queue:
         return None
-    job = queue.pop(0)
+
+    sequence = _read_manual_sequence()
+
+    if bool(sequence.get("active")):
+        sequence_id = str(sequence.get("id") or "")
+        matches = [
+            (index, job)
+            for index, job in enumerate(queue)
+            if isinstance(job, dict)
+            and _manual_job_matches(job, sequence_id)
+        ]
+        if not matches:
+            return None
+
+        queue_index, job = min(
+            matches,
+            key=lambda pair: int(
+                (
+                    pair[1].get("metadata")
+                    if isinstance(pair[1].get("metadata"), dict)
+                    else {}
+                ).get("manual_sequence_index")
+                or 0
+            ),
+        )
+        queue.pop(queue_index)
+    else:
+        job = queue.pop(0)
+
     write_json_atomic(PENDING_QUEUE_FILE, queue)
     return job if isinstance(job, dict) else None
 
@@ -135,7 +350,35 @@ def pop_next() -> dict[str, Any] | None:
     queue = _pruned_queue(READY_QUEUE_FILE, max_age=READY_JOB_MAX_AGE_SECONDS)
     if not queue:
         return None
-    job = queue.pop(0)
+
+    sequence = _read_manual_sequence()
+
+    if bool(sequence.get("active")):
+        sequence_id = str(sequence.get("id") or "")
+        matches = [
+            (index, job)
+            for index, job in enumerate(queue)
+            if isinstance(job, dict)
+            and _manual_job_matches(job, sequence_id)
+        ]
+        if not matches:
+            return None
+
+        queue_index, job = min(
+            matches,
+            key=lambda pair: int(
+                (
+                    pair[1].get("metadata")
+                    if isinstance(pair[1].get("metadata"), dict)
+                    else {}
+                ).get("manual_sequence_index")
+                or 0
+            ),
+        )
+        queue.pop(queue_index)
+    else:
+        job = queue.pop(0)
+
     write_json_atomic(READY_QUEUE_FILE, queue)
     return job if isinstance(job, dict) else None
 
@@ -149,6 +392,7 @@ def status() -> dict[str, Any]:
         "next_pending": pending[0] if pending else None,
         "next_ready": ready[0] if ready else None,
         "worker": read_json(WORKER_STATUS_FILE, {"state": "unknown"}),
+        "manual_sequence": manual_sequence_status(),
     }
 
 

@@ -8,7 +8,7 @@ from fastapi.templating import Jinja2Templates
 
 from boneco_game.core.settings import ASSETS_DIR, PROJECT_DIR, TEMPLATES_DIR
 from boneco_game.services.runtime_state import renderer_state
-from boneco_game.services.speech_queue import pop_next
+from boneco_game.services.speech_queue import acknowledge_speech_finished, pop_next
 
 
 router = APIRouter()
@@ -29,6 +29,24 @@ def api_renderer_state() -> JSONResponse:
 def api_next_speech() -> JSONResponse:
     job = pop_next()
     return JSONResponse({"job": job})
+
+
+@router.post("/api/renderer/speech-finished", response_class=JSONResponse)
+async def api_speech_finished(request: Request) -> JSONResponse:
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        payload = {}
+
+    result = acknowledge_speech_finished(
+        str(payload.get("job_id") or ""),
+        sequence_id=str(payload.get("manual_sequence_id") or ""),
+        sequence_index=payload.get("manual_sequence_index"),
+    )
+
+    return JSONResponse(
+        result,
+        status_code=200 if result.get("ok") else 400,
+    )
 
 
 @router.get("/file")

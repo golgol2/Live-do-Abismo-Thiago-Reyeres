@@ -3635,6 +3635,59 @@ function startLipSync(timeline, audio = sceneAudio, token = activeSpeechToken) {
   timelineFrame = requestAnimationFrame(tick);
 }
 
+async function acknowledgeSpeechFinished(job) {
+  const metadata =
+    job?.metadata && typeof job.metadata === "object"
+      ? job.metadata
+      : {};
+
+  const sequenceId = String(
+    metadata.manual_sequence_id || ""
+  ).trim();
+
+  if (!sequenceId) return true;
+
+  const payload = {
+    job_id: String(job?.id || ""),
+    manual_sequence_id: sequenceId,
+    manual_sequence_index: Number(
+      metadata.manual_sequence_index
+    ),
+  };
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await fetch(
+        "/api/renderer/speech-finished",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+          cache: "no-store",
+        }
+      );
+
+      if (response.ok) return true;
+    } catch (err) {
+      console.warn("speech finished ack failed", err);
+    }
+
+    await new Promise(resolve =>
+      window.setTimeout(resolve, 120 * (attempt + 1))
+    );
+  }
+
+  console.warn(
+    "speech finished ack exhausted retries",
+    payload
+  );
+
+  return false;
+}
+
+
 async function playSpeechJob(job) {
   const token = ++activeSpeechToken;
   const timeline = await timelineForJob(job);
@@ -3682,6 +3735,13 @@ async function finishSpeechVisual(token = activeSpeechToken, job = null) {
   sceneAudio.load();
   hideMessageCard();
   if (token !== activeSpeechToken) return;
+
+  if (job) {
+    await acknowledgeSpeechFinished(job);
+  }
+
+  if (token !== activeSpeechToken) return;
+
   speechBusy = false;
   onSpeechCompletedForCamera();
   await maybePlayNaturalReaction(job);

@@ -24,7 +24,7 @@ from boneco_game.services.renderer_window import (
     stop_renderer_window,
 )
 from boneco_game.services.runtime_state import read_state, update_state
-from boneco_game.services.speech_queue import enqueue_text, status
+from boneco_game.services.speech_queue import enqueue_manual_sequence, enqueue_text, status
 from boneco_game.services.tiktok_monitor import start_monitor, status as monitor_status, stop_monitor
 from boneco_game.services.transmission import start_transmission, status as transmission_status, stop_transmission
 
@@ -81,8 +81,28 @@ async def api_manual_speech(request: Request) -> JSONResponse:
     actor = str(payload.get("actor") or "main") if isinstance(payload, dict) else "main"
     if not text:
         return JSONResponse({"ok": False, "error": "Texto vazio."}, status_code=400)
-    job = enqueue_text(text, actor=actor, priority=90, metadata={"source": "manual"})
-    return JSONResponse({"ok": True, "job": job.to_dict()})
+    try:
+        sequence = enqueue_manual_sequence(
+            text,
+            actor=actor,
+            priority=90,
+        )
+    except RuntimeError as exc:
+        return JSONResponse(
+            {"ok": False, "error": str(exc)},
+            status_code=409,
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            {"ok": False, "error": str(exc)},
+            status_code=400,
+        )
+
+    return JSONResponse({
+        "ok": True,
+        "manual_sequence": sequence,
+        "parts": int(sequence.get("chunk_count") or 0),
+    })
 
 
 @router.get("/api/live/config", response_class=JSONResponse)

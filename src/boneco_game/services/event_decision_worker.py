@@ -112,8 +112,17 @@ def _text_for_event(event: dict[str, Any]) -> tuple[str, int]:
 
 
 def _speech_pipeline_busy(queue_status: dict[str, Any]) -> bool:
+    manual_sequence = (
+        queue_status.get("manual_sequence")
+        if isinstance(queue_status.get("manual_sequence"), dict)
+        else {}
+    )
+    if bool(manual_sequence.get("active")):
+        return True
+
     if int(queue_status.get("pending_size") or 0) or int(queue_status.get("ready_size") or 0):
         return True
+
     worker = queue_status.get("worker") if isinstance(queue_status.get("worker"), dict) else {}
     return str(worker.get("state") or "") in {"starting", "preparing", "prepared"}
 

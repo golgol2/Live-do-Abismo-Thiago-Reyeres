@@ -10,12 +10,21 @@ from typing import Any
 
 from boneco_game.core.json_store import read_json, write_json_atomic
 from boneco_game.core.settings import DEFAULT_HOST, DEFAULT_PORT, PROJECT_DIR, RUNS_DIR
-from boneco_game.services.audio_routing import ensure_live_audio_sink, player_sink_for_audio_source, remove_live_audio_sink, reset_live_audio_sink
+from boneco_game.services.audio_routing import (
+    create_live_audio_sink_session,
+    ensure_live_audio_sink,
+    is_project_audio_source,
+    player_sink_for_audio_source,
+    remove_live_audio_sink,
+    reset_live_audio_sink,
+    wait_live_audio_sinks_removed,
+)
 from boneco_game.services.renderer_window import restart_renderer_window, stop_renderer_window
 
 
 STATUS_FILE = RUNS_DIR / "transmission_status.json"
 LOG_FILE = RUNS_DIR / "transmission.log"
+RENDERER_HEARTBEAT_FILE = RUNS_DIR / "renderer_heartbeat.json"
 
 
 def start_transmission(
@@ -39,6 +48,8 @@ def start_transmission(
     if current.get("running"):
         return current
 
+    _cleanup_previous_transmission_session()
+
     if not str(rtmp_url or "").strip() and not str(output_file or "").strip():
         return _write_status(running=False, last_error="Informe RTMP URL ou arquivo de saida.")
 
@@ -47,10 +58,13 @@ def start_transmission(
     pulse_module_id = ""
     project_audio_requested = (
         not requested_audio_source
-        or requested_audio_source == "tiktok_live_pygame.monitor"
+        or is_project_audio_source(requested_audio_source)
     )
     if project_audio_requested:
-        audio_source, player_audio_sink, pulse_module_id = reset_live_audio_sink()
+        session_id = f"{int(time.time() * 1000)}_{os.getpid()}"
+        audio_source, player_audio_sink, pulse_module_id = (
+            create_live_audio_sink_session(session_id)
+        )
         if not audio_source:
             audio_source = detect_default_monitor_source()
             player_audio_sink = player_sink_for_audio_source(audio_source)
@@ -83,6 +97,7 @@ def start_transmission(
     if mode == "battle" and "mode=battle" not in url:
         separator = "&" if "?" in url else "?"
         url = f"{url}{separator}mode=battle"
+    renderer_start_at = time.time()
     renderer = restart_renderer_window(
         url=url,
         width=width,
@@ -103,8 +118,10 @@ def start_transmission(
             last_error=str(renderer.get("last_error") or "Falha ao abrir renderer."),
         )
 
-    # Evita capturar o primeiro frame preto do Chrome antes do renderer pintar a cena.
-    time.sleep(1.2 if virtual_display else 0.4)
+    _wait_renderer_ready(
+        started_at=renderer_start_at,
+        timeout=8.0 if virtual_display else 4.0,
+    )
 
     command = [
         shutil.which("python3") or "python3",
@@ -214,6 +231,7 @@ def stop_transmission() -> dict[str, Any]:
     _stop_virtual_display_pid(virtual_pid)
     _reap_child_pid(pid)
     remove_live_audio_sink()
+    wait_live_audio_sinks_removed(timeout=2.0)
     return _write_status(running=False, last_error="Transmissao parada.")
 
 
@@ -227,6 +245,8 @@ def status() -> dict[str, Any]:
         stop_renderer_window()
         virtual_pid = int(state.get("virtual_pid") or 0)
         _stop_virtual_display_pid(virtual_pid)
+        remove_live_audio_sink()
+        wait_live_audio_sinks_removed(timeout=2.0)
         return _write_status(
             running=False,
             pid=0,
@@ -263,6 +283,54 @@ def status() -> dict[str, Any]:
         "updated_at": state.get("updated_at") or 0,
     }
 
+
+def _cleanup_previous_transmission_session() -> None:
+    """Limpa recursos rastreados da live anterior antes de abrir uma nova."""
+    previous = read_json(STATUS_FILE, {})
+
+    if not isinstance(previous, dict):
+        previous = {}
+
+    old_pid = int(previous.get("pid") or 0)
+
+    if old_pid and _pid_alive(old_pid):
+        try:
+            os.killpg(old_pid, signal.SIGTERM)
+        except Exception:
+            try:
+                os.kill(old_pid, signal.SIGTERM)
+            except Exception:
+                pass
+
+        deadline = time.time() + 2.0
+
+        while time.time() < deadline and _pid_alive(old_pid):
+            time.sleep(0.08)
+
+        if _pid_alive(old_pid):
+            try:
+                os.killpg(old_pid, signal.SIGKILL)
+            except Exception:
+                try:
+                    os.kill(old_pid, signal.SIGKILL)
+                except Exception:
+                    pass
+
+        _reap_child_pid(old_pid)
+
+    stop_renderer_window()
+
+    old_virtual_pid = int(previous.get("virtual_pid") or 0)
+
+    if old_virtual_pid:
+        _stop_virtual_display_pid(old_virtual_pid)
+
+    # Remove tanto o sink legado quanto sinks únicos de sessões anteriores.
+    remove_live_audio_sink()
+    wait_live_audio_sinks_removed(timeout=2.0)
+
+    # Assentamento curto antes de recriar o grafo da próxima live.
+    time.sleep(0.25)
 
 def detect_default_monitor_source() -> str:
     info = _pactl(["info"])
@@ -389,6 +457,34 @@ def _reap_child_pid(pid: int) -> None:
         pass
     except OSError:
         pass
+
+
+def _wait_renderer_ready(*, started_at: float, timeout: float) -> None:
+    deadline = time.time() + max(0.5, float(timeout or 0))
+    minimum_wait_until = time.time() + 0.6
+
+    while time.time() < deadline:
+        heartbeat = read_json(RENDERER_HEARTBEAT_FILE, {})
+        if isinstance(heartbeat, dict):
+            updated_at = float(heartbeat.get("updated_at") or 0)
+            ready_state = int(heartbeat.get("active_video_ready_state") or 0)
+            current_video = str(heartbeat.get("current_video") or "")
+            game_loop_age_ms = float(heartbeat.get("game_loop_age_ms") or 0)
+            paused = bool(heartbeat.get("active_video_paused"))
+            boot_error = str(heartbeat.get("error") or "")
+
+            if (
+                updated_at >= started_at
+                and ready_state >= 2
+                and current_video
+                and game_loop_age_ms < 1500
+                and not paused
+                and not boot_error
+                and time.time() >= minimum_wait_until
+            ):
+                return
+
+        time.sleep(0.15)
 
 
 def _write_status(**payload: Any) -> dict[str, Any]:

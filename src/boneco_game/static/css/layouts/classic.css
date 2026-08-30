@@ -1,0 +1,8 @@
+/*
+ * Layout Classic.
+ * O visual continua temporariamente no renderer.css/renderer.js
+ * durante a migração modular.
+ */
+
+#stage[data-layout="classic"] {
+}

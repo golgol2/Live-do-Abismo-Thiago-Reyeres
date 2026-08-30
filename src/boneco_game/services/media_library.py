@@ -22,12 +22,22 @@ def list_media(directory: Path, extensions: set[str]) -> list[Path]:
     return sorted(path for path in directory.iterdir() if path.is_file() and path.suffix.lower() in extensions)
 
 
-def list_avatar_videos(avatar: str, mode: str) -> list[Path]:
+def list_avatar_videos(avatar: str, mode: str, *, exclude_mudo_d: bool = False) -> list[Path]:
     root = avatar_dir(avatar)
     candidates: list[Path] = []
     for folder in (root / mode, root / mode / "camera1", root / mode / "camera2"):
         candidates.extend(list_media(folder, VIDEO_EXTENSIONS))
+    if mode == "Mudo" and exclude_mudo_d:
+        candidates = [path for path in candidates if not _is_blocked_mudo_video(path)]
     return sorted(dict.fromkeys(candidates))
+
+
+def list_manual_mudo_videos(avatar: str) -> list[Path]:
+    root = avatar_dir(avatar)
+    candidates: list[Path] = []
+    for folder in (root / "Mudo", root / "Mudo" / "camera1", root / "Mudo" / "camera2"):
+        candidates.extend(list_media(folder, VIDEO_EXTENSIONS))
+    return sorted(dict.fromkeys(path for path in candidates if not _is_blocked_mudo_video(path)))
 
 
 def pick_avatar_video(avatar: str, mode: str, *, avoid: str = "") -> Path | None:
@@ -37,3 +47,6 @@ def pick_avatar_video(avatar: str, mode: str, *, avoid: str = "") -> Path | None
     filtered = [item for item in videos if str(item) != avoid]
     return random.choice(filtered or videos)
 
+
+def _is_blocked_mudo_video(path: Path) -> bool:
+    return path.stem.casefold().endswith("_d")

@@ -130,6 +130,17 @@ button:hover, a:hover { border-color: var(--accent); }
   min-height: 38px;
   padding: 8px 10px;
 }
+.manual-volume-controls {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255,255,255,.08);
+}
+.manual-volume-controls small {
+  color: var(--muted);
+  font-weight: 800;
+}
 .control-strip small {
   grid-column: 1 / -1;
   color: var(--muted);

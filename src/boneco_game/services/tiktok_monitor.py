@@ -64,8 +64,21 @@ def start_monitor(username: str, *, server_url: str = "http://127.0.0.1:2618") -
     with _LOCK:
         alive = bool(_THREAD and _THREAD.is_alive())
     if alive:
-        _update(username=username, server_url=server_url, last_error="Monitor ja estava rodando.")
-        return status()
+        current = status()
+        healthy = bool(current.get("connected")) and bool(current.get("listening"))
+        same_target = (
+            str(current.get("username") or "").strip().lstrip("@") == username
+            and str(current.get("server_url") or "").strip() == server_url
+        )
+        if healthy and same_target:
+            _update(username=username, server_url=server_url, last_error="Monitor ja estava rodando.")
+            return status()
+        _STOP.set()
+        _disconnect()
+        thread = _THREAD
+        if thread is not None:
+            thread.join(timeout=3.0)
+        _STOP.clear()
     _STOP.clear()
     _THREAD = threading.Thread(target=_loop, args=(username, server_url), daemon=True, name="boneco-game-tiktok-monitor")
     _THREAD.start()
@@ -397,8 +410,29 @@ def _small_raw(data: dict[str, Any]) -> dict[str, Any]:
         "username",
         "nickname",
         "comment",
+        "gift",
+        "giftId",
+        "gift_id",
         "giftName",
+        "gift_name",
+        "giftType",
+        "gift_type",
+        "giftValue",
+        "gift_value",
+        "giftPrice",
+        "gift_price",
+        "diamondCount",
+        "diamond_count",
+        "diamondValue",
+        "diamond_value",
+        "coins",
+        "coinCount",
+        "coin_count",
         "repeatCount",
+        "repeat_count",
+        "comboCount",
+        "combo_count",
+        "count",
         "userId",
         "profilePictureUrl",
         "profilePicture",

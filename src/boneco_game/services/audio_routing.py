@@ -79,8 +79,102 @@ def reset_live_audio_sink() -> tuple[str, str, str]:
         time.sleep(0.05)
     return ensure_live_audio_sink()
 
+def create_live_audio_sink_session(session_id: str = "") -> tuple[str, str, str]:
+    """Cria um null-sink exclusivo para esta transmissão."""
+    import os
+    import re
+
+    clean = re.sub(
+        r"[^A-Za-z0-9_]+",
+        "_",
+        str(session_id or "").strip(),
+    ).strip("_")
+
+    if not clean:
+        clean = f"{os.getpid()}_{int(time.time() * 1000)}"
+
+    sink_name = f"{LIVE_AUDIO_SINK}_{clean}"[:120]
+    monitor_name = f"{sink_name}.monitor"
+
+    module = subprocess.run(
+        [
+            "pactl",
+            "load-module",
+            "module-null-sink",
+            f"sink_name={sink_name}",
+            (
+                "sink_properties="
+                f"device.description={LIVE_AUDIO_DESCRIPTION}_{clean}"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    module_id = module.stdout.strip()
+
+    if module.returncode != 0 or not module_id:
+        return "", "", ""
+
+    deadline = time.monotonic() + 2.5
+
+    while time.monotonic() < deadline:
+        if monitor_name in list_pulse_sources():
+            # Pequeno assentamento do grafo PipeWire/Pulse.
+            time.sleep(0.20)
+            return monitor_name, sink_name, module_id
+        time.sleep(0.05)
+
+    subprocess.run(
+        ["pactl", "unload-module", module_id],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+    return "", "", ""
+
+
+def is_project_audio_source(audio_source: str) -> bool:
+    source = str(audio_source or "").strip()
+
+    if not source.endswith(".monitor"):
+        return False
+
+    sink_name = source[:-len(".monitor")]
+
+    return (
+        sink_name == LIVE_AUDIO_SINK
+        or sink_name.startswith(f"{LIVE_AUDIO_SINK}_")
+    )
+
+
+def wait_live_audio_sinks_removed(timeout: float = 2.0) -> bool:
+    deadline = time.monotonic() + max(0.1, float(timeout))
+
+    while time.monotonic() < deadline:
+        project_sources = [
+            source
+            for source in list_pulse_sources()
+            if is_project_audio_source(source)
+        ]
+
+        if not project_sources:
+            return True
+
+        time.sleep(0.05)
+
+    return not any(
+        is_project_audio_source(source)
+        for source in list_pulse_sources()
+    )
+
 def player_sink_for_audio_source(audio_source: str) -> str:
-    return LIVE_AUDIO_SINK if str(audio_source or "").strip() == LIVE_AUDIO_MONITOR else ""
+    source = str(audio_source or "").strip()
+    if not is_project_audio_source(source):
+        return ""
+    return source[:-len(".monitor")]
 
 
 def append_pulse_props(current: str, extra: str = LIVE_PLAYER_PULSE_PROPS) -> str:

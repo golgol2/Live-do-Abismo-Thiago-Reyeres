@@ -1,0 +1,227 @@
+/*
+ * Torre Triangular Neon.
+ * Piso triangular e fundo ficam no canvas do layout; a torre 3D fica nesta
+ * camada HTML para permitir fotos reais em cada cubo.
+ */
+
+#stage[data-layout="neon_triangle_tower"] {
+  background:
+    radial-gradient(circle at 50% 32%, rgba(34, 116, 156, .18), transparent 34%),
+    linear-gradient(180deg, #02040a 0%, #050711 48%, #000 100%);
+}
+
+#stage[data-layout="neon_triangle_tower"] #tunnelCanvas {
+  background: #010208;
+}
+
+#stage[data-layout="neon_triangle_tower"] #tunnelFloorCanvas {
+  z-index: 6;
+}
+
+.neon-triangle-tower-layer {
+  --tower-beat: 0;
+  --tower-energy: 0;
+  --tower-bass: 0;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 720px;
+  height: 1280px;
+  z-index: 8;
+  transform: translate3d(0, 0, 0);
+  transform-origin: 50% 100%;
+  transform-style: preserve-3d;
+  perspective: 1120px;
+  pointer-events: none;
+  overflow: visible;
+  filter: none;
+  will-change: transform;
+}
+
+.neon-triangle-tower-layer[hidden],
+#stage[data-visual="map"] .neon-triangle-tower-layer {
+  display: none !important;
+}
+
+.neon-triangle-tower-glow {
+  position: absolute;
+  left: 50%;
+  bottom: 188px;
+  width: 360px;
+  height: 74px;
+  border-radius: 50%;
+  transform:
+    translate3d(-50%, 0, -120px)
+    rotateX(72deg);
+  background:
+    radial-gradient(circle,
+      rgba(0, 0, 0, .62) 0 18%,
+      rgba(0, 0, 0, .34) 42%,
+      transparent 72%);
+  opacity: .78;
+  filter: blur(10px);
+}
+
+.neon-triangle-tower-stack {
+  position: absolute;
+  left: 50%;
+  bottom: 218px;
+  width: 0;
+  height: 0;
+  transform-style: preserve-3d;
+  transform:
+    rotateX(-2deg)
+    rotateY(-4deg)
+    rotateZ(-1deg);
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+
+.neon-user-cube {
+  --cube-size: 86px;
+  --cube-half: 43px;
+  --cube-hue: 190;
+  --cube-edge-hue: 190;
+  --gift-power: .25;
+  position: absolute;
+  left: calc(var(--cube-size) / -2);
+  top: calc(var(--cube-size) / -2);
+  width: var(--cube-size);
+  height: var(--cube-size);
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+.neon-user-cube::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: calc(var(--cube-size) + 7px);
+  width: calc(var(--cube-size) * 1.18);
+  height: calc(var(--cube-size) * .26);
+  border-radius: 50%;
+  transform: translateX(-50%) rotateX(58deg);
+  background: rgba(0, 0, 0, .54);
+  filter: blur(5px);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.neon-user-cube.is-base-row::after {
+  opacity: .72;
+}
+
+.neon-user-cube.is-empty {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.neon-user-cube-face {
+  position: absolute;
+  inset: 0;
+  width: var(--cube-size);
+  height: var(--cube-size);
+  overflow: hidden;
+  backface-visibility: visible;
+  border: 2px solid hsla(var(--cube-edge-hue), 100%, 66%, calc(.70 + var(--gift-power) * .20));
+  border-radius: 5px;
+  background:
+    linear-gradient(135deg, rgba(9, 16, 27, .98), rgba(0, 2, 7, .98));
+  box-shadow:
+    inset 0 0 10px rgba(255, 255, 255, .12),
+    inset 0 0 16px hsla(var(--cube-edge-hue), 100%, 54%, calc(.08 + var(--gift-power) * .08));
+}
+
+.neon-user-cube.is-base-row .neon-user-cube-face {
+  border-bottom-color: rgba(3, 5, 12, .58);
+}
+
+.neon-user-cube.is-base-row .neon-user-cube-face.front,
+.neon-user-cube.is-base-row .neon-user-cube-face.left,
+.neon-user-cube.is-base-row .neon-user-cube-face.right {
+  box-shadow:
+    inset 0 10px 12px rgba(255, 255, 255, .12),
+    inset 0 -12px 16px rgba(0, 0, 0, .38);
+}
+
+.neon-user-cube-face::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(145deg,
+      rgba(255, 255, 255, .20),
+      transparent 31%,
+      transparent 66%,
+      hsla(var(--cube-edge-hue), 100%, 66%, .10));
+}
+
+.neon-user-cube-face img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  object-position: center center;
+  filter: saturate(1.16) contrast(1.06);
+}
+
+.neon-user-cube-face span {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: rgba(255, 255, 255, .94);
+  font-size: 20px;
+  line-height: 1;
+  font-weight: 900;
+  text-shadow:
+    0 0 5px hsla(var(--cube-edge-hue), 100%, 72%, .58),
+    0 1px 5px rgba(0, 0, 0, .72);
+  background:
+    radial-gradient(circle at 34% 28%, hsla(var(--cube-edge-hue), 100%, 62%, .20), transparent 38%),
+    linear-gradient(135deg, rgba(17, 24, 42, .98), rgba(0, 3, 11, .99));
+}
+
+.neon-user-cube.is-leader .neon-user-cube-face {
+  border-color: hsla(var(--cube-edge-hue), 100%, 72%, .94);
+  box-shadow:
+    inset 0 0 14px rgba(255, 255, 255, .20),
+    inset 0 0 18px hsla(var(--cube-edge-hue), 100%, 58%, .16);
+}
+
+.neon-user-cube.is-top-gift .neon-user-cube-face {
+  border-color: hsla(var(--cube-edge-hue), 100%, 72%, .94);
+}
+
+.neon-user-cube-face.front {
+  transform: rotateY(0deg) translateZ(var(--cube-half));
+}
+
+.neon-user-cube-face.back {
+  transform: rotateY(180deg) translateZ(var(--cube-half));
+}
+
+.neon-user-cube-face.right {
+  transform: rotateY(90deg) translateZ(var(--cube-half));
+}
+
+.neon-user-cube-face.left {
+  transform: rotateY(-90deg) translateZ(var(--cube-half));
+}
+
+.neon-user-cube-face.top {
+  transform: rotateX(90deg) translateZ(var(--cube-half));
+}
+
+.neon-user-cube-face.bottom {
+  transform: rotateX(-90deg) translateZ(var(--cube-half));
+}
+
+@media (max-height: 900px) {
+  .neon-triangle-tower-layer {
+    transform: translate3d(0, 0, 0);
+  }
+}

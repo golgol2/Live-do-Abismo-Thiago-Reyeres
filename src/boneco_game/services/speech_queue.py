@@ -44,6 +44,41 @@ def cleanup_prepared_speech_files() -> int:
     return removed
 
 
+def cleanup_speech_job_files(
+    *paths: str,
+) -> int:
+    removed = 0
+    try:
+        base = PREPARED_AUDIO_DIR.resolve()
+    except OSError:
+        return removed
+
+    for raw in paths:
+        if not raw:
+            continue
+
+        try:
+            path = Path(str(raw)).resolve()
+        except OSError:
+            continue
+
+        if path.parent != base:
+            continue
+
+        if (
+            path.is_file()
+            and path.name.startswith("speech_")
+            and path.suffix.lower() in {".wav", ".json"}
+        ):
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                pass
+
+    return removed
+
+
 def _read_queue(path: Path) -> list[dict[str, Any]]:
     payload = read_json(path, [])
     return payload if isinstance(payload, list) else []
@@ -80,6 +115,7 @@ def enqueue_manual_sequence(
     *,
     actor: str = "main",
     priority: int = 90,
+    manual_music_path: str = "",
 ) -> dict[str, Any]:
     chunks = safe_tts_chunks(
         str(text or ""),
@@ -104,6 +140,7 @@ def enqueue_manual_sequence(
         "actor": actor if actor in {"main", "dj", "oracle", "guest", "user"} else "main",
         "priority": int(priority),
         "chunks": chunks,
+        "manual_music_path": str(manual_music_path or "").strip(),
         "next_enqueue_index": 0,
         "last_finished_index": -1,
         "created_at": now,
@@ -205,6 +242,7 @@ def _public_manual_sequence(state: dict[str, Any]) -> dict[str, Any]:
         "created_at": float(state.get("created_at") or 0),
         "updated_at": float(state.get("updated_at") or 0),
         "completed_at": float(state.get("completed_at") or 0),
+        "manual_music_path": str(state.get("manual_music_path") or ""),
     }
 
 
@@ -251,6 +289,7 @@ def _fill_manual_sequence_window(state: dict[str, Any]) -> None:
                 "manual_sequence_part": next_index + 1,
                 "manual_sequence_total": len(chunks),
                 "manual_sequence_last": next_index == len(chunks) - 1,
+                "manual_music_path": str(state.get("manual_music_path") or ""),
             },
         )
         next_index += 1
@@ -347,7 +386,11 @@ def prepare_pending_job(job: dict[str, Any]) -> dict[str, Any]:
 
 
 def pop_next() -> dict[str, Any] | None:
-    queue = _pruned_queue(READY_QUEUE_FILE, max_age=READY_JOB_MAX_AGE_SECONDS)
+    queue = _pruned_queue(
+        READY_QUEUE_FILE,
+        max_age=READY_JOB_MAX_AGE_SECONDS,
+        prefer_prepared=True,
+    )
     if not queue:
         return None
 
@@ -384,8 +427,18 @@ def pop_next() -> dict[str, Any] | None:
 
 
 def status() -> dict[str, Any]:
-    pending = _pruned_queue(PENDING_QUEUE_FILE, max_age=PENDING_JOB_MAX_AGE_SECONDS)
-    ready = _pruned_queue(READY_QUEUE_FILE, max_age=READY_JOB_MAX_AGE_SECONDS)
+    # Status é somente leitura. Consultas do painel/health-check
+    # não podem remover jobs das filas.
+    pending = _fresh_queue(
+        PENDING_QUEUE_FILE,
+        max_age=PENDING_JOB_MAX_AGE_SECONDS,
+    )
+    ready = _fresh_queue(
+        READY_QUEUE_FILE,
+        max_age=READY_JOB_MAX_AGE_SECONDS,
+        prefer_prepared=True,
+    )
+
     return {
         "pending_size": len(pending),
         "ready_size": len(ready),
@@ -396,18 +449,99 @@ def status() -> dict[str, Any]:
     }
 
 
-def _pruned_queue(path: Path, *, max_age: float) -> list[dict[str, Any]]:
+def _fresh_queue(
+    path: Path,
+    *,
+    max_age: float,
+    prefer_prepared: bool = False,
+) -> list[dict[str, Any]]:
     queue = _read_queue(path)
     now = time.time()
-    fresh = [job for job in queue if not _job_too_old(job, now=now, max_age=max_age)]
+
+    return [
+        job
+        for job in queue
+        if not _job_too_old(
+            job,
+            now=now,
+            max_age=max_age,
+            prefer_prepared=prefer_prepared,
+        )
+    ]
+
+
+def _pruned_queue(
+    path: Path,
+    *,
+    max_age: float,
+    prefer_prepared: bool = False,
+) -> list[dict[str, Any]]:
+    queue = _read_queue(path)
+    now = time.time()
+
+    fresh = [
+        job
+        for job in queue
+        if not _job_too_old(
+            job,
+            now=now,
+            max_age=max_age,
+            prefer_prepared=prefer_prepared,
+        )
+    ]
+
     if len(fresh) != len(queue):
-        write_json_atomic(path, fresh)
+        write_json_atomic(
+            path,
+            fresh,
+        )
+
     return fresh
 
 
-def _job_too_old(job: dict[str, Any], *, now: float, max_age: float) -> bool:
-    created_at = _job_created_at(job)
-    return created_at > 0 and now - created_at > max_age
+def _job_too_old(
+    job: dict[str, Any],
+    *,
+    now: float,
+    max_age: float,
+    prefer_prepared: bool = False,
+) -> bool:
+    reference_at = (
+        _job_ready_at(job)
+        if prefer_prepared
+        else _job_created_at(job)
+    )
+
+    return (
+        reference_at > 0
+        and now - reference_at > max_age
+    )
+
+
+def _job_ready_at(
+    job: dict[str, Any],
+) -> float:
+    metadata = (
+        job.get("metadata")
+        if isinstance(
+            job.get("metadata"),
+            dict,
+        )
+        else {}
+    )
+
+    try:
+        prepared_at = float(
+            metadata.get("prepared_at")
+            or 0
+        )
+    except (TypeError, ValueError):
+        prepared_at = 0.0
+
+    if prepared_at > 0:
+        return prepared_at
+
+    return _job_created_at(job)
 
 
 def _job_before_last_reset(job: dict[str, Any]) -> bool:

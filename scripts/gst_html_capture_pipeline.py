@@ -60,6 +60,7 @@ def run_pipeline(args: argparse.Namespace) -> tuple[bool, bool]:
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
 
+    install_timestamp_probes(pipeline, state)
     pipeline.set_state(Gst.State.PLAYING)
     install_pipeline_diagnostics(pipeline, state)
     try:
@@ -90,6 +91,83 @@ def run_pipeline(args: argparse.Namespace) -> tuple[bool, bool]:
 
 
 
+def install_timestamp_probes(
+    pipeline: Gst.Pipeline,
+    state: dict,
+) -> None:
+    snapshots: dict[str, dict[str, int]] = {}
+    state["timestamp_diag"] = snapshots
+
+    def attach(label: str, element_name: str) -> None:
+        element = pipeline.get_by_name(element_name)
+
+        if element is None:
+            raise RuntimeError(
+                f"elemento de diagnostico ausente: {element_name}"
+            )
+
+        pad = element.get_static_pad("src")
+
+        if pad is None:
+            raise RuntimeError(
+                f"src pad ausente: {element_name}"
+            )
+
+        snapshots[label] = {
+            "count": 0,
+            "first_pts": -1,
+            "last_pts": -1,
+            "last_dts": -1,
+            "last_duration": -1,
+        }
+
+        def probe(_pad, info):
+            buffer = info.get_buffer()
+
+            if buffer is None:
+                return Gst.PadProbeReturn.OK
+
+            snap = snapshots[label]
+
+            pts = (
+                int(buffer.pts)
+                if buffer.pts != Gst.CLOCK_TIME_NONE
+                else -1
+            )
+
+            dts = (
+                int(buffer.dts)
+                if buffer.dts != Gst.CLOCK_TIME_NONE
+                else -1
+            )
+
+            duration = (
+                int(buffer.duration)
+                if buffer.duration != Gst.CLOCK_TIME_NONE
+                else -1
+            )
+
+            snap["count"] += 1
+
+            if snap["first_pts"] < 0 and pts >= 0:
+                snap["first_pts"] = pts
+
+            snap["last_pts"] = pts
+            snap["last_dts"] = dts
+            snap["last_duration"] = duration
+
+            return Gst.PadProbeReturn.OK
+
+        pad.add_probe(
+            Gst.PadProbeType.BUFFER,
+            probe,
+        )
+
+    attach("aac", "html_audio_parse")
+    attach("h264", "html_video_parse")
+    attach("flv", "mux")
+
+
 def install_pipeline_diagnostics(pipeline: Gst.Pipeline, state: dict[str, bool]) -> None:
     state["clock_logged"] = False
 
@@ -107,6 +185,73 @@ def install_pipeline_diagnostics(pipeline: Gst.Pipeline, state: dict[str, bool])
                 file=sys.stderr,
                 flush=True,
             )
+
+        audio_src = pipeline.get_by_name("html_audio_src")
+        audio_rate = pipeline.get_by_name("html_audio_rate")
+
+        def prop_int(element, name: str) -> int:
+            if element is None:
+                return -1
+            try:
+                return int(element.get_property(name))
+            except Exception:
+                return -1
+
+        try:
+            base_ns = int(pipeline.get_base_time())
+        except Exception:
+            base_ns = 0
+
+        try:
+            clock_ns = int(clock.get_time()) if clock is not None else 0
+        except Exception:
+            clock_ns = 0
+
+        running_ns = (
+            clock_ns - base_ns
+            if base_ns > 0 and clock_ns >= base_ns
+            else 0
+        )
+
+        def caps_text(element, pad_name: str) -> str:
+            if element is None:
+                return "missing"
+
+            pad = element.get_static_pad(pad_name)
+
+            if pad is None:
+                return "no-pad"
+
+            try:
+                caps = pad.get_current_caps()
+            except Exception:
+                return "error"
+
+            if caps is None:
+                return "none"
+
+            try:
+                return caps.to_string()
+            except Exception:
+                return "error"
+
+        print(
+            "[html-capture] timing "
+            f"clock={clock_name} "
+            f"base_ns={base_ns} "
+            f"clock_ns={clock_ns} "
+            f"running_ns={running_ns} "
+            f"rate_in={prop_int(audio_rate, 'in')} "
+            f"rate_out={prop_int(audio_rate, 'out')} "
+            f"rate_add={prop_int(audio_rate, 'add')} "
+            f"rate_drop={prop_int(audio_rate, 'drop')} "
+            f"buffer_us={prop_int(audio_src, 'actual-buffer-time')} "
+            f"latency_us={prop_int(audio_src, 'actual-latency-time')} "
+            f"rate_in_caps={caps_text(audio_rate, 'sink')!r} "
+            f"rate_out_caps={caps_text(audio_rate, 'src')!r}",
+            file=sys.stderr,
+            flush=True,
+        )
 
         queue_parts: list[str] = []
         for name in (
@@ -135,6 +280,72 @@ def install_pipeline_diagnostics(pipeline: Gst.Pipeline, state: dict[str, bool])
                 file=sys.stderr,
                 flush=True,
             )
+
+        rtmp_sink = pipeline.get_by_name("html_rtmp_sink")
+        if rtmp_sink is not None:
+            try:
+                stats = rtmp_sink.get_property("stats")
+            except Exception:
+                stats = None
+
+            if stats is not None:
+                def stat_int(name: str) -> int:
+                    try:
+                        return int(stats.get_value(name))
+                    except Exception:
+                        return -1
+
+                out_total = stat_int("out-bytes-total")
+                out_acked = stat_int("out-bytes-acked")
+                unacked = (
+                    out_total - out_acked
+                    if out_total >= 0 and out_acked >= 0
+                    else -1
+                )
+                print(
+                    "[html-capture] rtmp2sink "
+                    f"out_total={out_total} "
+                    f"out_acked={out_acked} "
+                    f"unacked={unacked} "
+                    f"in_chunk={stat_int('in-chunk-size')} "
+                    f"out_chunk={stat_int('out-chunk-size')} "
+                    f"in_window_ack={stat_int('in-window-ack-size')} "
+                    f"out_window_ack={stat_int('out-window-ack-size')}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+        timestamp_diag = state.get("timestamp_diag") or {}
+        timestamp_parts: list[str] = []
+
+        for label in ("aac", "h264", "flv"):
+            snap = timestamp_diag.get(label) or {}
+
+            first_pts = int(snap.get("first_pts", -1))
+            last_pts = int(snap.get("last_pts", -1))
+
+            delta_pts = (
+                last_pts - first_pts
+                if first_pts >= 0 and last_pts >= first_pts
+                else -1
+            )
+
+            timestamp_parts.append(
+                f"{label}:"
+                f"count={int(snap.get('count', 0))},"
+                f"pts_ns={last_pts},"
+                f"delta_ns={delta_pts},"
+                f"dts_ns={int(snap.get('last_dts', -1))},"
+                f"dur_ns={int(snap.get('last_duration', -1))}"
+            )
+
+        print(
+            "[html-capture] pts "
+            + " | ".join(timestamp_parts),
+            file=sys.stderr,
+            flush=True,
+        )
+
         return True
 
     GLib.timeout_add_seconds(1, tick)
@@ -191,6 +402,7 @@ def video_branch(args: argparse.Namespace, bitrate: int) -> list[str]:
         "!",
         *encoder_branch(args, bitrate),
         "h264parse",
+        "name=html_video_parse",
         "config-interval=1",
         "!",
         "queue",
@@ -237,6 +449,7 @@ def audio_branch(args: argparse.Namespace) -> list[str]:
         raise RuntimeError("audio-source vazio; informe uma fonte .monitor para evitar capturar microfone.")
     return [
         "pulsesrc",
+        "name=html_audio_src",
         "do-timestamp=true",
         f"device={gst_quote(args.audio_source)}",
         "!",
@@ -251,6 +464,7 @@ def audio_branch(args: argparse.Namespace) -> list[str]:
         "audioresample",
         "!",
         "audiorate",
+        "name=html_audio_rate",
         "skip-to-first=true",
         "!",
         "audio/x-raw,rate=44100,channels=2",
@@ -261,9 +475,11 @@ def audio_branch(args: argparse.Namespace) -> list[str]:
         "message=true",
         "!",
         "avenc_aac",
+        "name=html_aac_enc",
         "bitrate=128000",
         "!",
         "aacparse",
+        "name=html_audio_parse",
         "!",
         "queue",
         "name=audio_mux_q",
@@ -315,6 +531,7 @@ def output_branch(args: argparse.Namespace) -> list[str]:
         "max-size-time=2000000000",
         "!",
         sink,
+        "name=html_rtmp_sink",
         f"location={gst_quote(args.rtmp_url)}",
         "sync=true",
         "async=false",

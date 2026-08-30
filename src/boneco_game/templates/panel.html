@@ -11,24 +11,23 @@
     <header class="topbar">
       <div>
         <strong>Boneco Game</strong>
-        <span>modelo jogo interativo</span>
+        <span>painel da live</span>
       </div>
       <nav>
         <button id="liveToggleTop" class="live-toggle" type="button">Iniciar live</button>
         <button id="backgroundRemovalTop" type="button">Processar fundos</button>
         <button id="openCameraModal" type="button">Câmera</button>
+        <button id="openLipSyncModal" type="button">Boca / pausas</button>
         <button id="systemUpdateTop" type="button">Atualizar sistema</button>
         <button id="openScheduleModal" type="button">Programar live</button>
         <a href="/renderer?preview=1" target="_blank">Prévia renderer</a>
-        <a href="/map-editor" target="_blank">Editor de mapa</a>
-        <a href="/walk-editor" target="_blank">Editor de corrida</a>
       </nav>
     </header>
 
     <section class="grid">
       <article class="card">
         <h1>Painel da live</h1>
-        <p>Base limpa para o novo fluxo. Aqui entram monitoramento, transmissão, TTS e controle do mapa em módulos separados.</p>
+        <p>Base limpa para monitoramento, transmissão, TTS, lip-sync e layouts da live em módulos separados.</p>
         <div class="row">
           <button id="refreshStatus">Atualizar status</button>
           <button id="resetCamera">Resetar câmera</button>
@@ -39,6 +38,48 @@
           <button id="setNormalMode" type="button">Modo normal</button>
           <button id="setBattleMode" type="button">Modo batalha HDMI</button>
         </div>
+        <div class="control-strip">
+          <div>
+            <strong>Programação automática</strong>
+            <span id="scheduleSummary">Carregando programação...</span>
+          </div>
+          <button id="openScheduleModalInline" type="button">Configurar programação</button>
+        </div>
+        <div class="control-strip">
+          <div>
+            <strong>Layout da próxima live</strong>
+            <span id="layoutSummary">Carregando layouts...</span>
+          </div>
+
+          <label class="checkline">
+            <input id="layoutForceManual" type="checkbox">
+            Forçar layout selecionado
+          </label>
+
+          <div class="mini-control">
+            <label for="layoutManualSelect">Layout</label>
+            <select id="layoutManualSelect"></select>
+          </div>
+
+          <div>
+            <strong>Layouts habilitados</strong>
+            <div id="layoutEnabledList" class="row"></div>
+          </div>
+
+          <div class="row">
+            <button id="saveLayoutSettings" type="button">Salvar layouts</button>
+            <a
+              id="previewLayoutLink"
+              href="/renderer?preview=1&layout=classic"
+              target="_blank"
+            >Prévia selecionada</a>
+          </div>
+
+          <small id="layoutSettingsStatus">
+            No modo aleatório, todos os layouts são usados uma vez antes de repetir.
+          </small>
+        </div>
+
         <div class="control-strip">
           <div>
             <strong>Foto no peito</strong>
@@ -62,7 +103,11 @@
           <button id="applyBellyProfileScale" type="button">Aplicar agora</button>
           <small id="bellyProfileScaleStatus">Aplica na live em tempo real.</small>
         </div>
-        <pre id="statusBox">Carregando...</pre>
+        <div class="row">
+          <button id="copyDiagnosticStatus" type="button">Copiar diagnóstico</button>
+          <button id="copyErrorLogs" type="button">Copiar logs de erro</button>
+          <small id="diagnosticCopyStatus">Informações carregadas somente quando solicitadas.</small>
+        </div>
       </article>
 
       <article class="card">
@@ -187,14 +232,35 @@
           <option value="oracle">Oráculo</option>
           <option value="guest">Convidado</option>
         </select>
+        <label>Música da fala manual</label>
+        <select id="manualSpeechMusic">
+          <option value="">Usar música normal da live</option>
+        </select>
         <label>Texto</label>
         <textarea id="manualText" rows="5" placeholder="Texto para o personagem falar..."></textarea>
         <button id="sendSpeech">Enviar para fila</button>
+
+        <div class="manual-volume-controls">
+          <div class="mini-control">
+            <span>Volume fundo</span>
+            <input id="musicIdleVolumeRange" type="range" min="0" max="1" step="0.005">
+            <input id="musicIdleVolume" type="number" min="0" max="1" step="0.005" value="0.160">
+          </div>
+          <div class="mini-control">
+            <span>Volume falando</span>
+            <input id="musicSpeechVolumeRange" type="range" min="0" max="1" step="0.005">
+            <input id="musicSpeechVolume" type="number" min="0" max="1" step="0.005" value="0.055">
+          </div>
+          <small id="musicVolumeStatus">Aguardando ajuste.</small>
+        </div>
       </article>
 
       <article class="card">
         <h2>Simular evento</h2>
-        <p>Entrada para testar a fila nova sem TikTok. Presente tem prioridade sobre comentário.</p>
+        <p>
+          Fila oficial passa por IA/TTS. Teste de preview é apenas visual e não
+          altera comentário, presente, fala ou estado da live real.
+        </p>
         <label>Usuário</label>
         <input id="eventUser" value="teste" placeholder="usuario">
         <label>Nome exibido</label>
@@ -202,24 +268,27 @@
         <label>Comentário</label>
         <textarea id="eventComment" rows="3" placeholder="Mensagem do chat..."></textarea>
         <div class="row">
-          <button id="sendCommentEvent">Enviar comentário</button>
+          <button id="sendCommentEvent">Enviar comentário para fila</button>
+          <button id="previewCommentEvent" type="button">Testar comentário no preview</button>
         </div>
         <label>Presente</label>
         <input id="eventGift" value="Rosa" placeholder="Nome do presente">
         <label>Quantidade</label>
         <input id="eventGiftCount" type="number" min="1" value="1">
         <div class="row">
-          <button id="sendGiftEvent">Enviar presente</button>
+          <button id="sendGiftEvent">Enviar presente para fila</button>
+          <button id="previewGiftEvent" type="button">Testar presente no preview</button>
         </div>
+        <small id="previewEventStatus"></small>
       </article>
 
       <article class="card">
         <h2>Escopo novo</h2>
         <ul>
-          <li>Personagem anda pelo mapa 2D.</li>
-          <li>DJ e Oráculo serão pontos do mapa, não blocos misturados no fluxo.</li>
+          <li>Personagem fica focado em fala, reação e presença no layout da live.</li>
+          <li>DJ e Oráculo entram como módulos próprios da live.</li>
           <li>Câmera e lip-sync ficam como prioridade técnica.</li>
-          <li>Avatares/app de usuários entram depois como cenas do mapa.</li>
+          <li>Avatares/app de usuários entram depois como recursos dos layouts.</li>
         </ul>
       </article>
     </section>
@@ -238,6 +307,7 @@
       </label>
 
       <section class="camera-sliders">
+        <div class="camera-slider-row"><div class="camera-slider-head"><label>Zoom distante mínimo</label><output id="cameraFarZoomMinOutput">0.82</output></div><div class="camera-slider-controls"><input id="cameraFarZoomMinRange" type="range" min="0.68" max="0.98" step="0.01"><input id="cameraFarZoomMin" type="number" min="0.68" max="0.98" step="0.01" value="{{ '%.2f'|format(state.get('camera_far_zoom_min', 0.82)|float) }}"></div><small>Abaixo de 1,00 a câmera se afasta e mostra mais da cena.</small></div>
         <div class="camera-slider-row"><div class="camera-slider-head"><label>Zoom médio máximo</label><output id="cameraMediumZoomMaxOutput">1.22</output></div><div class="camera-slider-controls"><input id="cameraMediumZoomMaxRange" type="range" min="1.08" max="1.30" step="0.01"><input id="cameraMediumZoomMax" type="number" min="1.08" max="1.30" step="0.01" value="{{ '%.2f'|format(state.get('camera_medium_zoom_max', 1.22)|float) }}"></div></div>
         <div class="camera-slider-row"><div class="camera-slider-head"><label>Zoom close máximo</label><output id="cameraCloseZoomMaxOutput">1.40</output></div><div class="camera-slider-controls"><input id="cameraCloseZoomMaxRange" type="range" min="1.18" max="1.48" step="0.01"><input id="cameraCloseZoomMax" type="number" min="1.18" max="1.48" step="0.01" value="{{ '%.2f'|format(state.get('camera_close_zoom_max', 1.40)|float) }}"></div></div>
         <div class="camera-slider-row"><div class="camera-slider-head"><label>Movimento horizontal máximo</label><output id="cameraXMaxOutput">22 px</output></div><div class="camera-slider-controls"><input id="cameraXMaxRange" type="range" min="0" max="60" step="1"><input id="cameraXMax" type="number" min="0" max="60" step="1" value="{{ state.get('camera_x_max', 22)|int }}"></div></div>
@@ -251,6 +321,7 @@
       <section class="camera-shot-controls">
         <strong>Teste de enquadramento</strong>
         <div class="row">
+          <button id="cameraDistantShot" type="button">Distante</button>
           <button id="cameraFullShot" type="button">Corpo todo</button>
           <button id="cameraMediumShot" type="button">Médio</button>
           <button id="cameraCloseShot" type="button">Close</button>
@@ -262,6 +333,83 @@
       <footer class="modal-actions">
         <button id="saveCameraSettings" type="button">Salvar e aplicar</button>
         <button id="closeCameraModalBottom" type="button">Fechar</button>
+      </footer>
+    </div>
+  </dialog>
+
+<dialog id="lipSyncModal" class="modal camera-modal">
+    <div class="modal-card camera-modal-card">
+      <header class="modal-head">
+        <div>
+          <strong>Sincronia da boca / pausas</strong>
+          <span>Ajuste ao vivo. O renderer lê os novos valores sem reiniciar a transmissão.</span>
+        </div>
+        <button id="closeLipSyncModal" type="button">Fechar</button>
+      </header>
+
+      <section class="camera-sliders">
+        <div class="camera-slider-row">
+          <div class="camera-slider-head">
+            <label>Velocidade da boca durante pausa</label>
+            <output id="lipPauseRateOutput">0.58×</output>
+          </div>
+          <div class="camera-slider-controls">
+            <input id="lipPauseRateRange" type="range" min="0.10" max="1.00" step="0.02">
+            <input id="lipPauseRate" type="number" min="0.10" max="1.00" step="0.02" value="0.58">
+          </div>
+          <small>Menor = mais congelado. 1,00 = boca continua em velocidade normal.</small>
+        </div>
+
+        <div class="camera-slider-row">
+          <div class="camera-slider-head">
+            <label>Congelar/desacelerar pausas até</label>
+            <output id="lipFreezeMaxOutput">0.35 s</output>
+          </div>
+          <div class="camera-slider-controls">
+            <input id="lipFreezeMaxRange" type="range" min="0.35" max="1.50" step="0.05">
+            <input id="lipFreezeMax" type="number" min="0.35" max="1.50" step="0.05" value="0.35">
+          </div>
+          <small>Aumente se a boca ainda mexer entre frases curtas.</small>
+        </div>
+
+        <div class="camera-slider-row">
+          <div class="camera-slider-head">
+            <label>Trocar para vídeo mudo em pausas acima de</label>
+            <output id="lipMuteMinOutput">2.00 s</output>
+          </div>
+          <div class="camera-slider-controls">
+            <input id="lipMuteMinRange" type="range" min="0.50" max="4.00" step="0.10">
+            <input id="lipMuteMin" type="number" min="0.50" max="4.00" step="0.10" value="2.00">
+          </div>
+          <small>Pausas longas usam o vídeo idle/mudo em vez de manter a boca falando.</small>
+        </div>
+
+        <div class="camera-slider-row">
+          <div class="camera-slider-head">
+            <label>Antecipar troca para mudo</label>
+            <output id="lipMuteAdvanceOutput">0.025 s</output>
+          </div>
+          <div class="camera-slider-controls">
+            <input id="lipMuteAdvanceRange" type="range" min="0.000" max="0.200" step="0.005">
+            <input id="lipMuteAdvance" type="number" min="0.000" max="0.200" step="0.005" value="0.025">
+          </div>
+          <small>Compensa pequenos atrasos visuais na transição para o vídeo mudo.</small>
+        </div>
+      </section>
+
+      <section class="camera-shot-controls">
+        <strong>Teste visual</strong>
+        <p class="modal-note">Os sliders aplicam automaticamente. O renderer normalmente recebe a mudança em até cerca de 1 segundo.</p>
+        <div class="row">
+          <button id="lipSyncTestSpeech" type="button">Testar frase com pausas</button>
+          <button id="lipSyncDefaults" type="button">Valores padrão</button>
+        </div>
+        <small id="lipSyncSettingsStatus">Aguardando ajuste.</small>
+      </section>
+
+      <footer class="modal-actions">
+        <button id="saveLipSyncSettings" type="button">Salvar e aplicar agora</button>
+        <button id="closeLipSyncModalBottom" type="button">Fechar</button>
       </footer>
     </div>
   </dialog>
@@ -424,9 +572,9 @@
 
       <label class="checkline">
         <input id="scheduleAutoEnabled" type="checkbox">
-        Ativar entrada e saída automática futuramente
+        Ativar entrada e saída automática
       </label>
-      <p class="modal-note">Com Streamlabs marcado, o botão do topo gera RTMP automaticamente. Sem Streamlabs e sem RTMP, ele abre apenas saída HTML + monitor.</p>
+      <p class="modal-note">Com Streamlabs marcado, o agendador gera RTMP automaticamente. Sem Streamlabs e sem RTMP, ele abre apenas saída HTML + monitor.</p>
 
       <footer class="modal-actions">
         <button id="saveScheduleConfig" type="button">Salvar programação</button>
@@ -437,6 +585,6 @@
   </dialog>
   <script src="/static/js/background_removal.js?v=1"></script>
   <script src="/static/js/system_update.js?v=1"></script>
-  <script src="/static/js/panel.js?v=13"></script>
+  <script src="/static/js/panel.js?v=22"></script>
 </body>
 </html>

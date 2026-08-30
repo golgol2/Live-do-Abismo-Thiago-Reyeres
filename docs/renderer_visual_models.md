@@ -48,7 +48,7 @@ O estilo ativo aparece em `/api/renderer/state`:
 
 A versão v2 adiciona:
 
-- RGB correndo dentro dos anéis em segmentos, em vez de cada anel ter uma cor fixa.
+- RGB percorrendo os anéis em segmentos, em vez de cada anel ter uma cor fixa.
 - linhas de profundidade que giram e convergem para o centro;
 - pulsos luminosos que percorrem essas linhas;
 - fotos reais de `tunnelPeople` viajando pelas linhas em direção ao centro;
@@ -273,3 +273,72 @@ O cubo só aparece quando:
 - existe pelo menos um presente computado.
 
 A camada usa z-index 4 e o world/actor permanece acima.
+
+## Câmera distante e Super Cubo multieixos
+
+### Câmera
+A câmera dinâmica passa a possuir quatro enquadramentos:
+- `distant`: zoom abaixo de 1.0 para afastar;
+- `full`;
+- `medium`;
+- `close`.
+
+`camera_far_zoom_min` controla o limite do enquadramento distante e pode ser
+ajustado no modal de câmera. O modo automático passa a sortear `distant`
+junto com os demais enquadramentos.
+
+### Super Cubo
+O cubo continua atrás do personagem (`z-index: 4`, world em 5), porém:
+- fica mais alto e um pouco maior;
+- escolhe posições horizontais e verticais suaves a cada poucos segundos;
+- pode ir para esquerda/direita e subir/descer;
+- possui um pequeno balanço contínuo;
+- gira simultaneamente e de forma mais evidente nos eixos X, Y e Z.
+
+## Câmera distante sem bordas
+
+O enquadramento `distant` não usa mais `scale(<1)` no `cameraLayer` completo.
+
+Nova estratégia:
+- túnel, piso e paredes continuam ocupando 100% da saída;
+- quando o zoom fica abaixo de 1.0, somente `world` recua;
+- Boneco, barriga e elementos ligados ao personagem diminuem juntos;
+- o cenário permanece contínuo nas bordas;
+- zoom médio/close continua usando o transform global tradicional.
+
+Isso trata o modo distante como profundidade dentro de uma cena/mapa,
+em vez de encolher uma imagem pronta de 720x1280.
+
+## Câmera distante v4 — mundo ancorado e cenário multiplicado
+
+A estratégia anterior diminuía somente `world`, o que fazia o Boneco parecer
+desprendido do cenário.
+
+A v4 mantém o túnel/plasma como fundo infinito e, no enquadramento distante:
+- `world` recua usando `transform-origin: 50% 100%`, mantendo os pés ancorados;
+- o piso recua pelo mesmo fator de zoom;
+- as paredes recuam pelo mesmo fator;
+- piso e paredes ganham cópias laterais espelhadas para preencher o campo de visão adicional;
+- o canvas não é reduzido, portanto não existe moldura preta;
+- barriga e Boneco continuam no mesmo `world`.
+
+O efeito passa a se comportar mais como uma câmera abrindo o campo de visão de
+um mapa do que como uma imagem sendo encolhida.
+
+## Super Cubo Social - cubo magico de presentes
+
+As paredes laterais de presentes foram removidas.
+
+O ranking de presentes passa a alimentar somente o Super Cubo:
+- cada face possui uma grade 6x6;
+- o lider de presentes ocupa uma face inteira;
+- os demais usuarios ocupam exatamente um quadradinho cada;
+- as outras cinco faces comportam ate 180 usuarios;
+- foto usa `object-fit: cover`;
+- sem foto, o quadradinho usa iniciais;
+- o ranking continua independente da fila de falas;
+- piso permanece inalterado;
+- movimento/rotacao suave do cubo permanece ativo.
+
+O backend nao mantem mais `event_gift_wall.json`, slots de parede ou
+`wall_gifts` no estado do renderer.

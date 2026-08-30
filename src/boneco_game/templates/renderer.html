@@ -5,52 +5,33 @@
   <meta name="viewport" content="width=720,height=1280,initial-scale=1,maximum-scale=1,user-scalable=no">
   <meta name="google" content="notranslate">
   <title>Boneco Game Renderer</title>
-  <link rel="stylesheet" href="/static/css/renderer.css?v=23">
+  <link rel="stylesheet" href="/static/css/renderer.css?v=29">
 </head>
 <body class="notranslate">
   <div id="stage">
     <div id="cameraLayer">
     <canvas id="tunnelCanvas" width="360" height="640" aria-hidden="true"></canvas>
     <canvas id="tunnelFloorCanvas" width="360" height="640" aria-hidden="true"></canvas>
-    <canvas id="tunnelWallCanvas" width="360" height="640" aria-hidden="true"></canvas>
-    <div id="skyLayer" class="skyLayer" aria-hidden="true">
+<div id="skyLayer" class="skyLayer" aria-hidden="true">
       <div class="skyStars"></div>
       <div class="skyClouds"></div>
       <div class="skyOrb"></div>
     </div>
     <div id="superCubeLayer" class="super-cube-layer" hidden aria-hidden="true">
-          <div class="super-cube-glow"></div>
-          <div id="superCube" class="super-cube">
-            <div class="super-cube-face super-cube-front">
-              <img class="super-cube-image" alt="">
-              <span class="super-cube-fallback">?</span>
-            </div>
-            <div class="super-cube-face super-cube-back">
-              <img class="super-cube-image" alt="">
-              <span class="super-cube-fallback">?</span>
-            </div>
-            <div class="super-cube-face super-cube-right">
-              <img class="super-cube-image" alt="">
-              <span class="super-cube-fallback">?</span>
-            </div>
-            <div class="super-cube-face super-cube-left">
-              <img class="super-cube-image" alt="">
-              <span class="super-cube-fallback">?</span>
-            </div>
-            <div class="super-cube-face super-cube-top">
-              <img class="super-cube-image" alt="">
-              <span class="super-cube-fallback">?</span>
-            </div>
-            <div class="super-cube-face super-cube-bottom">
-              <img class="super-cube-image" alt="">
-              <span class="super-cube-fallback">?</span>
-            </div>
-          </div>
-          <div class="super-cube-caption">
-            <strong id="superCubeName">TOP PRESENTES</strong>
-            <span id="superCubeScore">0 presentes</span>
-          </div>
-        </div>
+      <div class="super-cube-glow"></div>
+      <div id="superCube" class="super-cube">
+        <div class="super-cube-face super-cube-front" data-face="0"></div>
+        <div class="super-cube-face super-cube-back" data-face="1"></div>
+        <div class="super-cube-face super-cube-right" data-face="2"></div>
+        <div class="super-cube-face super-cube-left" data-face="3"></div>
+        <div class="super-cube-face super-cube-top" data-face="4"></div>
+        <div class="super-cube-face super-cube-bottom" data-face="5"></div>
+      </div>
+      <div class="super-cube-caption">
+        <strong id="superCubeName">TOP PRESENTES</strong>
+        <span id="superCubeScore">aguardando presentes</span>
+      </div>
+    </div>
     <div id="world">
       <div id="mapLower"></div>
       <div id="mapBack"></div>
@@ -82,6 +63,7 @@
     <audio id="sceneAudio" preload="auto"></audio>
     <audio id="musicAudio" preload="auto" loop></audio>
   </div>
-  <script src="/static/js/renderer.js?v=60"></script>
+  <script src="/static/js/layouts/registry.js?v=1"></script>
+  <script src="/static/js/renderer.js?v=93"></script>
 </body>
 </html>

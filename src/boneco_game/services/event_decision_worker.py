@@ -96,7 +96,7 @@ def _text_for_event(event: dict[str, Any]) -> tuple[str, int]:
         gift = gift_display_name(metadata.get("gift_name") or event.get("text") or "presente")
         count = int(metadata.get("count") or 1)
         text = generate_gift_thank_you(name, gift, count, max_chars=150)
-        return _clip(text, 150), 95
+        return _clip(text, 150), int(event.get("priority") or 95)
     if kind == "comment":
         name = _event_name(event)
         message = str(event.get("text") or "").strip()
@@ -107,7 +107,7 @@ def _text_for_event(event: dict[str, Any]) -> tuple[str, int]:
             max_chars=150,
             user_key=str(event.get("username") or name),
         )
-        return _clip(text, 150), 45
+        return _clip(text, 150), int(event.get("priority") or 45)
     return "", 0
 
 

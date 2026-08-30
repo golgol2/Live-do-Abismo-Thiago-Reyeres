@@ -67,7 +67,8 @@ def run_check_once(*, allow_recovery: bool = True) -> dict[str, Any]:
     _last_monitor_total = monitor_total
 
     network = monitor.get("network") if isinstance(monitor.get("network"), dict) else {}
-    tor_ok = str(network.get("mode") or "").strip().lower() == "tor" and bool(network.get("forced"))
+    network_mode = str(network.get("mode") or "").strip().lower()
+    network_ok = network_mode in {"tor", "direct", "active"} and bool(network.get("forced"))
 
     thread_alive = bool(monitor.get("thread_alive"))
     connected = bool(monitor.get("connected"))
@@ -88,9 +89,9 @@ def run_check_once(*, allow_recovery: bool = True) -> dict[str, Any]:
     recovery = {"attempted": False}
 
     if running:
-        if not tor_ok:
+        if not network_ok:
             health = "critical"
-            message = "Monitor sem confirmação de Tor obrigatório. Recuperação automática direta bloqueada."
+            message = "Monitor sem confirmação de rede válida para eventos TikTok."
         elif technical_problem:
             health = "recovering" if unhealthy_for >= MONITOR_GRACE_SECONDS else "attention"
             message = (
@@ -139,7 +140,7 @@ def run_check_once(*, allow_recovery: bool = True) -> dict[str, Any]:
             "unhealthy_seconds": round(unhealthy_for, 1),
         },
         "tor": {
-            "ok": tor_ok,
+            "ok": network_ok,
             "mode": str(network.get("mode") or "unknown"),
             "forced": bool(network.get("forced")),
             "detail": str(network.get("detail") or ""),

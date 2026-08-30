@@ -14,8 +14,6 @@ Novo projeto focado no modelo de jogo interativo para TikTok.
 
 - `routes/panel.py`: painel principal.
 - `routes/renderer.py`: renderer HTML e estado da cena.
-- `routes/map_editor.py`: editor básico de mapa.
-- `services/map_service.py`: leitura/gravação de mapa.
 - `services/media_library.py`: seleção de mídia do personagem.
 - `services/audio_timeline.py`: base da sincronização labial.
 - `services/speech_queue.py`: filas de fala pendente/pronta.

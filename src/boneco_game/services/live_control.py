@@ -10,6 +10,11 @@ from boneco_game.services.credentials import StreamlabsCredentialProvider, end_s
 from boneco_game.services.renderer_window import restart_renderer_window, status as renderer_window_status
 from boneco_game.services.runtime_state import read_state, update_state
 from boneco_game.services.live_events import reset_event_state
+from boneco_game.services.layout_manager import (
+    cancel_layout_session,
+    confirm_layout_session,
+    reserve_layout_session,
+)
 from boneco_game.services.speech_queue import push_ready, reset_speech_queues
 from boneco_game.services.text_ai import generate_live_opening
 from boneco_game.services.tts_service import synthesize_for_job
@@ -18,15 +23,6 @@ from boneco_game.services.transmission import start_transmission, status as tran
 
 
 STATUS_FILE = RUNS_DIR / "live_control_status.json"
-
-TUNNEL_STYLES = ("classic", "orbital_cathedral")
-
-def _next_tunnel_style() -> str:
-    current = str(read_state().get("tunnel_style") or "classic")
-    available = [style for style in TUNNEL_STYLES if style != current]
-    if not available:
-        return TUNNEL_STYLES[0]
-    return available[int(time.time()) % len(available)]
 
 _LAST_MONITOR_RECOVERY = 0.0
 
@@ -111,11 +107,37 @@ def start_live(payload: dict[str, Any] | None = None) -> dict[str, Any]:
         reset_speech_queues()
         return _result(False, "error", f"Falha ao preparar abertura da live: {exc}", config, opening={"prepared": False, "error": str(exc)})
 
+    previous_state = read_state()
+
+    previous_tunnel_style = str(
+        previous_state.get("tunnel_style")
+        or "classic"
+    )
+
+    layout_session = reserve_layout_session(
+        previous_layout=str(
+            previous_state.get("active_layout")
+            or previous_tunnel_style
+            or ""
+        )
+    )
+
+    layout_session_id = str(
+        layout_session.get("layout_session_id")
+        or ""
+    )
+
+    active_layout = str(
+        layout_session.get("active_layout")
+        or "classic"
+    )
+
     mode = "battle" if config.get("mode") == "battle" else "normal"
+
     update_state(
         mode=mode,
         current_actor="main",
-        tunnel_style="orbital_cathedral",
+        tunnel_style=active_layout,
         camera={"x": 0, "y": 0, "zoom": 1.06 if mode == "battle" else 1},
     )
 
@@ -131,6 +153,12 @@ def start_live(payload: dict[str, Any] | None = None) -> dict[str, Any]:
                 audience_type=str(config.get("audience_type") or "0"),
             )
         except RuntimeError as exc:
+            cancel_layout_session(
+                layout_session_id
+            )
+            update_state(
+                tunnel_style=previous_tunnel_style
+            )
             return _result(False, "error", str(exc) or "Falha ao gerar credenciais Streamlabs.", config)
         rtmp_url = credentials.rtmp_url
         streamlabs_info = {
@@ -158,10 +186,19 @@ def start_live(payload: dict[str, Any] | None = None) -> dict[str, Any]:
             pulse_sink=player_audio_sink,
         )
         if not renderer.get("running"):
+            cancel_layout_session(
+                layout_session_id
+            )
+            update_state(
+                tunnel_style=previous_tunnel_style
+            )
             return _result(False, "error", str(renderer.get("last_error") or "Falha ao abrir renderer."), config, renderer=renderer)
         monitor = start_monitor(
             str(config.get("username") or "").strip(),
             server_url=str(config.get("monitor_server") or "http://127.0.0.1:2618").strip(),
+        )
+        confirm_layout_session(
+            layout_session_id
         )
         return _result(True, "running", "Live HDMI/Live Studio iniciada com abertura preparada.", config, monitor=monitor, renderer=renderer, opening=opening, transport="local")
 
@@ -184,6 +221,15 @@ def start_live(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     if not transmission.get("running"):
         if streamlabs_info.get("auto"):
             streamlabs_info["start_failed_cleanup"] = end_streamlabs_live_if_saved()
+
+        cancel_layout_session(
+            layout_session_id
+        )
+
+        update_state(
+            tunnel_style=previous_tunnel_style
+        )
+
         return _result(
             False,
             "error",
@@ -192,6 +238,10 @@ def start_live(payload: dict[str, Any] | None = None) -> dict[str, Any]:
             streamlabs=streamlabs_info,
             transport="direct",
         )
+
+    confirm_layout_session(
+        layout_session_id
+    )
 
     monitor = start_monitor(
         str(config.get("username") or "").strip(),

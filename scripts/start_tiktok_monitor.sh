@@ -45,7 +45,7 @@ port_listening() {
 }
 
 if port_listening; then
-  write_network_state "tor" "monitor ja ativo na porta $PORT"
+  write_network_state "active" "monitor ja ativo na porta $PORT"
   exit 0
 fi
 
@@ -72,12 +72,21 @@ if [[ ! -d node_modules ]]; then
   npm install
 fi
 
-echo "Iniciando TikTok monitor via Tor $TOR_HOST:$TOR_SOCKS_PORT" >>"$LOG_FILE"
-write_network_state "tor" "monitor iniciado via Tor SOCKS $TOR_HOST:$TOR_SOCKS_PORT"
-(
-  exec 9>&- || true
-  setsid -f env TORSOCKS_ALLOW_INBOUND=1 torsocks -a "$TOR_HOST" -P "$TOR_SOCKS_PORT" node server.js >>"$LOG_FILE" 2>&1 </dev/null
-)
+if torsocks -a "$TOR_HOST" -P "$TOR_SOCKS_PORT" getent hosts www.tiktok.com >/dev/null 2>&1; then
+  echo "Iniciando TikTok monitor via Tor $TOR_HOST:$TOR_SOCKS_PORT" >>"$LOG_FILE"
+  write_network_state "tor" "monitor iniciado via Tor SOCKS $TOR_HOST:$TOR_SOCKS_PORT"
+  (
+    exec 9>&- || true
+    setsid -f env TORSOCKS_ALLOW_INBOUND=1 torsocks -a "$TOR_HOST" -P "$TOR_SOCKS_PORT" node server.js >>"$LOG_FILE" 2>&1 </dev/null
+  )
+else
+  echo "Tor SOCKS ativo, mas DNS do TikTok falhou; iniciando monitor em rede direta" >>"$LOG_FILE"
+  write_network_state "direct" "fallback direto: Tor ativo, mas DNS do TikTok falhou"
+  (
+    exec 9>&- || true
+    setsid -f env TIKTOK_MONITOR_PORT="$PORT" BONECO_GAME_DIR="$PROJECT_DIR" node server.js >>"$LOG_FILE" 2>&1 </dev/null
+  )
+fi
 
 sleep 2
 if port_listening; then

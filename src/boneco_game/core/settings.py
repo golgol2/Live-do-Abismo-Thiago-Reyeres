@@ -13,7 +13,6 @@ TEMPLATES_DIR = PROJECT_DIR / "src" / "boneco_game" / "templates"
 STATIC_DIR = PROJECT_DIR / "src" / "boneco_game" / "static"
 
 DEFAULT_AVATAR = os.getenv("BONECO_GAME_AVATAR", "BONECO_MAPA_2D")
-DEFAULT_MAP = os.getenv("BONECO_GAME_MAP", "Padrao")
 DEFAULT_HOST = os.getenv("BONECO_GAME_HOST", "127.0.0.1")
 DEFAULT_PORT = int(os.getenv("BONECO_GAME_PORT", "9292"))
 DEFAULT_WIDTH = 720

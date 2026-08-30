@@ -15,6 +15,7 @@ from boneco_game.services.audio_routing import append_pulse_props
 
 STATUS_FILE = RUNS_DIR / "renderer_window.json"
 PROFILE_DIR = RUNS_DIR / "chrome_renderer_profile"
+LOG_FILE = RUNS_DIR / "logs" / "renderer_window.log"
 
 
 def start_renderer_window(
@@ -47,13 +48,19 @@ def start_renderer_window(
         "--no-default-browser-check",
         "--disable-translate",
         "--disable-session-crashed-bubble",
-        "--disable-infobars",
-        "--autoplay-policy=no-user-gesture-required",
-        "--lang=pt-BR",
-        "--accept-lang=pt-BR,pt,en-US,en",
-        "--force-device-scale-factor=1",
-        f"--window-size={max(320, int(width))},{max(320, int(height))}",
-        f"--window-position={int(x)},{int(y)}",
+            "--disable-infobars",
+            "--autoplay-policy=no-user-gesture-required",
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
+            "--disable-hang-monitor",
+            "--lang=pt-BR",
+            "--accept-lang=pt-BR,pt,en-US,en",
+            "--force-device-scale-factor=1",
+            f"--window-size={max(320, int(width))},{max(320, int(height))}",
+            f"--window-position={int(x)},{int(y)}",
+            "--enable-logging=stderr",
+            "--v=0",
     ]
     if "chrome" in Path(chrome).name or "chromium" in Path(chrome).name:
         # Same conservative browser mode used by the old renderer. It avoids
@@ -80,12 +87,14 @@ def start_renderer_window(
         env["PULSE_PROP"] = append_pulse_props(env.get("PULSE_PROP", ""))
 
     try:
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        log_handle = LOG_FILE.open("ab")
         process = subprocess.Popen(
             cmd,
             cwd=str(RUNS_DIR),
             env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=log_handle,
             start_new_session=True,
         )
     except Exception as exc:

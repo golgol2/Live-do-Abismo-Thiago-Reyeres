@@ -8,27 +8,24 @@ const DEFAULT_MUTE_SWITCH_ADVANCE = 0.025;
 const STALLED_VIDEO_PLAY_RETRY_MS = 2500;
 const STALLED_VIDEO_SWITCH_MS = 4000;
 const STALLED_VIDEO_RELOAD_MS = 8000;
-const WALK_START_MS = 1550;
-const WALK_STOP_MS = 6800;
-const WALK_TRANSITION_TIME_SCALE = 2.25;
-const WALK_TRANSITION_PLAYBACK_RATE = 1;
-const DEFAULT_CAMERA_SPEED = 3.25;
-const DEFAULT_RUN_DIRECTION = "right";
+const GENERAL_VIDEO_PLAY_RETRY_MS = 1200;
+const GENERAL_VIDEO_RESTART_MS = 4500;
+const GENERAL_VIDEO_RELOAD_MS = 12000;
+const SPEECH_STUCK_TIMEOUT_MS = 18000;
 const MUSIC_IDLE_VOLUME = 0.16;
 const MUSIC_SPEECH_VOLUME = 0.055;
 const MUSIC_REACTION_VOLUME = 0.006;
 const TUNNEL_W = 360;
 const TUNNEL_H = 640;
 const BELLY_PROFILE_BASE_SIZE = 92;
+const RENDERER_ASSET_VERSION = "90";
 
 const stage = document.getElementById("stage");
 const cameraLayer = document.getElementById("cameraLayer");
 const tunnelCanvas = document.getElementById("tunnelCanvas");
 const tunnelFloorCanvas = document.getElementById("tunnelFloorCanvas");
-const tunnelWallCanvas = document.getElementById("tunnelWallCanvas");
 const tunnelCtx = tunnelCanvas ? tunnelCanvas.getContext("2d", { alpha: false }) : null;
 const tunnelFloorCtx = tunnelFloorCanvas ? tunnelFloorCanvas.getContext("2d", { alpha: true }) : null;
-const tunnelWallCtx = tunnelWallCanvas ? tunnelWallCanvas.getContext("2d", { alpha: true }) : null;
 const skyLayer = document.getElementById("skyLayer");
 const world = document.getElementById("world");
 const actorLayer = document.getElementById("actorLayer");
@@ -47,7 +44,54 @@ const messageText = document.getElementById("messageText");
 const bellyProfile = document.getElementById("bellyProfile");
 const bellyProfileImage = document.getElementById("bellyProfileImage");
 const bellyProfileLetter = document.getElementById("bellyProfileLetter");
-const urlMode = new URLSearchParams(window.location.search).get("mode") || "";
+const rendererUrlParams = new URLSearchParams(window.location.search);
+const urlMode = rendererUrlParams.get("mode") || "";
+const rendererPreviewMode = rendererUrlParams.get("preview") === "1";
+const rendererPreviewLayout = String(
+  rendererUrlParams.get("layout") || ""
+).trim();
+
+function reportRendererBootError(payload = {}) {
+  fetch(
+    "/api/renderer/heartbeat",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        phase: "error",
+        location: window.location.href,
+        ...payload,
+      }),
+      cache: "no-store",
+    }
+  ).catch(() => {});
+}
+
+window.addEventListener("error", event => {
+  reportRendererBootError({
+    error: String(event.message || "renderer error"),
+    source: String(event.filename || ""),
+    lineno: Number(event.lineno || 0),
+    colno: Number(event.colno || 0),
+  });
+});
+
+window.addEventListener("unhandledrejection", event => {
+  reportRendererBootError({
+    error: String(event.reason?.message || event.reason || "renderer rejection"),
+    source: "unhandledrejection",
+  });
+});
+
+let previewEventCursor = 0;
+let previewVisualQueue = [];
+let previewVisualBusy = false;
+let previewGiftLeaderboard = [];
+const loadedLayoutAssets = new Set();
+const loadingLayoutAssets = new Map();
+let layoutActivationToken = 0;
 
 let activeVideo = videoA;
 let standbyVideo = videoB;
@@ -56,12 +100,19 @@ let currentScene = "";
 let currentMap = null;
 let visualMode = "tunnel";
 let tunnelStyle = "classic";
+let activeLayout = "classic";
 let mapSignature = "";
 let mapRuntimeKey = "";
 let skyRuntimeKey = "";
+let lastGameLoopAt = 0;
+let lastTunnelDrawAt = 0;
 let mapEntries = [];
 let musicTracks = [];
+let manualMusicTracks = [];
 let musicCurrent = "";
+let manualSpeechMusicActive = false;
+let manualSpeechMusicTrack = "";
+let manualSpeechMusicPrevious = "";
 let musicAudioContext = null;
 let musicAnalyser = null;
 let musicFreqData = null;
@@ -70,42 +121,31 @@ let musicBass = 0;
 let tunnelHue = 144;
 let tunnelPeople = [];
 let tunnelPeopleSignature = "";
-let giftWall = [];
-let giftWallSignature = "";
 const tunnelImageCache = new Map();
 let mediaState = {
   idle: [],
+  manual_idle: [],
   talking: [],
   reactions: [],
-  walk_right: [],
-  walk_left: [],
-  walk_start_right: [],
-  walk_loop_right: [],
-  walk_stop_right: [],
-  walk_start_left: [],
-  walk_loop_left: [],
-  walk_stop_left: [],
-};
-let walkMotion = {
-  start: 1.7,
-  accel_end: 3.0,
-  loop_start: 3.25,
-  loop_end: 7.8,
-  decel_start: 8.4,
-  stop_end: 14.6,
 };
 let mediaCacheVersion = "";
 let activeSpeechToken = 0;
 let speechBusy = false;
 let speechFetchBusy = false;
+let speechStartedAt = 0;
+let speechDeadlineAt = 0;
+let activeSpeechJob = null;
 let reactionBusy = false;
 let answeredInteractionCount = 0;
 let lastReactionVideo = "";
 const REACTION_EVERY_RESPONSES = 20;
 let runtimeConfig = {
+  micro_pause_rate: MICRO_PAUSE_RATE,
   micro_pause_freeze_max: DEFAULT_MICRO_PAUSE_MAX,
   pause_to_mute_min: DEFAULT_PAUSE_TO_MUTE_MIN,
   mute_switch_advance: DEFAULT_MUTE_SWITCH_ADVANCE,
+  music_idle_volume: MUSIC_IDLE_VOLUME,
+  music_speech_volume: MUSIC_SPEECH_VOLUME,
 };
 let timelineFrame = 0;
 let timelineFinishTimer = 0;
@@ -120,41 +160,35 @@ let videoWatchdogState = {
 };
 let videoRecoveryBusy = false;
 let videoFrameCallbackToken = 0;
+let generalVideoWatchdogState = {
+  src: "",
+  time: 0,
+  wallAt: 0,
+  retryAt: 0,
+  recovering: false,
+};
+const bellyTrackCanvas = document.createElement("canvas");
+bellyTrackCanvas.width = 144;
+bellyTrackCanvas.height = 256;
+const bellyTrackCtx = bellyTrackCanvas.getContext("2d", { willReadFrequently: true });
+const bellyMaskCanvas = document.createElement("canvas");
+bellyMaskCanvas.width = bellyTrackCanvas.width;
+bellyMaskCanvas.height = bellyTrackCanvas.height;
+const bellyMaskCtx = bellyMaskCanvas.getContext("2d", { willReadFrequently: true });
 let bellyTrackFrame = 0;
 let bellyTrackLastScan = 0;
 let bellyTrackMisses = 0;
 let bellyProfileScale = 0.82;
 let bellyProfileOffsetX = 0;
 let bellyProfileOffsetY = 0;
+let bellyTrackPosition = { x: 360, y: 640, size: 92, holeRadius: 46 };
 let videoSwitchToken = 0;
 let idleFullPlay = false;
 let idleFullPlayStartedAt = 0;
-let walk = {
-  actorX: 640,
-  targetX: null,
-  direction: "right",
-  directionCyclesLeft: 0,
-  phase: "idle",
-  phaseStartedAt: 0,
-  loopStartedAt: 0,
-  phaseUntil: 0,
-  pauseUntil: 0,
-  lastTs: 0,
-  speed: 112,
-};
-let sceneCamera = {
-  currentViewportScale: 1,
-  targetViewportScale: 1,
-  wideUntil: 0,
-  nextDecisionAt: 0,
-  lastStartScale: 0,
-  lastStopScale: 0,
-  activeShotKind: "",
-};
-
 let liveCameraConfig = {
   enabled: true,
   manualShot: "auto",
+  farZoomMin: 0.82,
   mediumZoomMax: 1.22,
   closeZoomMax: 1.40,
   xMax: 22,
@@ -179,128 +213,7 @@ let liveCamera = {
   lastManualShot: "auto",
   initialized: false,
 };
-const bellyTrackCanvas = document.createElement("canvas");
-bellyTrackCanvas.width = 144;
-bellyTrackCanvas.height = 256;
-const bellyTrackCtx = bellyTrackCanvas.getContext("2d", { willReadFrequently: true });
-const bellyMaskCanvas = document.createElement("canvas");
-bellyMaskCanvas.width = bellyTrackCanvas.width;
-bellyMaskCanvas.height = bellyTrackCanvas.height;
-const bellyMaskCtx = bellyMaskCanvas.getContext("2d", { willReadFrequently: true });
-let bellyTrackPosition = { x: 360, y: 640, size: 92, holeRadius: 46 };
 
-function randomBetween(min, max) {
-  const a = Number(min), b = Number(max);
-  if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
-  if (b <= a) return a;
-  return a + Math.random() * (b - a);
-}
-
-function randomIntInclusive(min, max) {
-  return Math.round(randomBetween(Math.ceil(min), Math.floor(max)));
-}
-
-function normalizeLiveCameraConfig(state = {}) {
-  const mediumMax = clampNumber(state.camera_medium_zoom_max, 1.08, 1.30, 1.22);
-  const closeMax = Math.max(mediumMax + 0.03, clampNumber(state.camera_close_zoom_max, 1.18, 1.48, 1.40));
-  const transitionMin = clampNumber(state.camera_transition_min, 1.5, 12, 3);
-  const transitionMax = Math.max(transitionMin, clampNumber(state.camera_transition_max, transitionMin, 15, 7));
-  const responsesMin = Math.round(clampNumber(state.camera_responses_min, 1, 8, 2));
-  const responsesMax = Math.max(responsesMin, Math.round(clampNumber(state.camera_responses_max, responsesMin, 12, 5)));
-  liveCameraConfig = {
-    enabled: state.dynamic_camera_enabled !== false,
-    manualShot: ["auto", "full", "medium", "close"].includes(String(state.camera_manual_shot || "auto"))
-      ? String(state.camera_manual_shot || "auto") : "auto",
-    mediumZoomMax: mediumMax,
-    closeZoomMax: closeMax,
-    xMax: clampNumber(state.camera_x_max, 0, 60, 22),
-    closeYMax: clampNumber(state.camera_close_y_max, 40, 260, 175),
-    transitionMin, transitionMax, responsesMin, responsesMax,
-  };
-}
-
-function cameraShotTarget(kind) {
-  const cfg = liveCameraConfig;
-  const x = randomBetween(-cfg.xMax, cfg.xMax);
-  if (kind === "close") {
-    return {
-      kind,
-      zoom: randomBetween(Math.max(1.20, cfg.mediumZoomMax + 0.03), cfg.closeZoomMax),
-      x,
-      y: randomBetween(cfg.closeYMax * 0.66, cfg.closeYMax),
-    };
-  }
-  if (kind === "medium") {
-    return {
-      kind,
-      zoom: randomBetween(1.08, cfg.mediumZoomMax),
-      x: x * 0.82,
-      y: randomBetween(cfg.closeYMax * 0.10, cfg.closeYMax * 0.26),
-    };
-  }
-  return { kind: "full", zoom: randomBetween(1.0, 1.05), x: x * 0.45, y: randomBetween(-10, 14) };
-}
-
-function chooseNextCameraShot(forceKind = "") {
-  let kind = String(forceKind || "").trim().toLowerCase();
-  if (!["full", "medium", "close"].includes(kind)) {
-    const choices = liveCamera.shot === "close"
-      ? ["full", "medium", "medium", "full"]
-      : liveCamera.shot === "medium"
-        ? ["full", "close", "full", "close"]
-        : ["medium", "close", "medium", "close", "full"];
-    kind = choices[Math.floor(Math.random() * choices.length)] || "full";
-  }
-  const target = cameraShotTarget(kind);
-  liveCamera.shot = target.kind;
-  liveCamera.targetZoom = target.zoom;
-  liveCamera.targetX = target.x;
-  liveCamera.targetY = target.y;
-  liveCamera.transitionSeconds = randomBetween(liveCameraConfig.transitionMin, liveCameraConfig.transitionMax);
-  liveCamera.responsesLeft = randomIntInclusive(liveCameraConfig.responsesMin, liveCameraConfig.responsesMax);
-}
-
-function resetDynamicLiveCamera() {
-  Object.assign(liveCamera, {
-    currentZoom: 1, targetZoom: 1,
-    currentX: 0, targetX: 0,
-    currentY: 0, targetY: 0,
-    shot: "full",
-    responsesLeft: randomIntInclusive(liveCameraConfig.responsesMin, liveCameraConfig.responsesMax),
-    transitionSeconds: Math.max(2, liveCameraConfig.transitionMin),
-    lastFrameAt: 0,
-    initialized: true,
-  });
-  if (cameraLayer) cameraLayer.style.transform = "translate3d(0px,0px,0) scale(1)";
-}
-
-function onSpeechCompletedForCamera() {
-  if (!isTunnelMode() || !liveCameraConfig.enabled || liveCameraConfig.manualShot !== "auto") return;
-  liveCamera.responsesLeft -= 1;
-  if (liveCamera.responsesLeft <= 0) chooseNextCameraShot();
-}
-
-function updateDynamicLiveCamera(now) {
-  if (!cameraLayer) return;
-  if (!isTunnelMode() || !liveCameraConfig.enabled) {
-    liveCamera.targetZoom = 1; liveCamera.targetX = 0; liveCamera.targetY = 0;
-  } else {
-    if (!liveCamera.initialized) resetDynamicLiveCamera();
-    if (liveCameraConfig.manualShot !== liveCamera.lastManualShot) {
-      liveCamera.lastManualShot = liveCameraConfig.manualShot;
-      chooseNextCameraShot(liveCameraConfig.manualShot === "auto" ? "" : liveCameraConfig.manualShot);
-    }
-  }
-  if (!liveCamera.lastFrameAt) liveCamera.lastFrameAt = now;
-  const dt = Math.min(0.08, Math.max(0.001, (now - liveCamera.lastFrameAt) / 1000));
-  liveCamera.lastFrameAt = now;
-  const smoothing = 1 - Math.exp(-dt * (4.2 / Math.max(1.5, Number(liveCamera.transitionSeconds || 5))));
-  liveCamera.currentZoom += (liveCamera.targetZoom - liveCamera.currentZoom) * smoothing;
-  liveCamera.currentX += (liveCamera.targetX - liveCamera.currentX) * smoothing;
-  liveCamera.currentY += (liveCamera.targetY - liveCamera.currentY) * smoothing;
-  cameraLayer.style.transform =
-    `translate3d(${liveCamera.currentX.toFixed(2)}px, ${liveCamera.currentY.toFixed(2)}px, 0) scale(${liveCamera.currentZoom.toFixed(5)})`;
-}
 
 function fitStage() {
   const scale = Math.max(window.innerWidth / STAGE_WIDTH, window.innerHeight / STAGE_HEIGHT);
@@ -341,115 +254,6 @@ function mediaImageUrl(path) {
   return fileUrl(clean);
 }
 
-function superCubeInitials(item) {
-  const label = String(
-    item?.display_name ||
-    item?.displayName ||
-    item?.username ||
-    "?"
-  ).trim();
-
-  if (!label) return "?";
-
-  const parts = label.split(/\s+/).filter(Boolean);
-  if (parts.length >= 2) {
-    return (
-      String(parts[0][0] || "") +
-      String(parts[parts.length - 1][0] || "")
-    ).toUpperCase();
-  }
-
-  return label.slice(0, 2).toUpperCase();
-}
-
-function syncSuperCube(item, style = "") {
-  const layer = document.getElementById("superCubeLayer");
-  if (!layer) return;
-
-  const cleanStyle = String(style || "").trim();
-  const isOrbital = cleanStyle === "orbital_cathedral";
-
-  const total = Math.max(
-    0,
-    Math.round(Number(item?.total_count || item?.count || 0))
-  );
-
-  const username = String(item?.username || "").trim();
-  const displayName = String(
-    item?.display_name || item?.displayName || username
-  ).trim();
-
-  const hasLeader = Boolean(item && (username || displayName) && total > 0);
-
-  if (!isOrbital || !hasLeader) {
-    layer.hidden = true;
-    return;
-  }
-
-  layer.hidden = false;
-
-  const profile = String(
-    item?.profile_image ||
-    item?.avatar_url ||
-    item?.profile ||
-    ""
-  ).trim();
-
-  const initials = superCubeInitials(item);
-  const imageUrl = profile ? mediaImageUrl(profile) : "";
-
-  const images = Array.from(
-    layer.querySelectorAll(".super-cube-image")
-  );
-  const fallbacks = Array.from(
-    layer.querySelectorAll(".super-cube-fallback")
-  );
-
-  fallbacks.forEach((fallback) => {
-    fallback.textContent = initials;
-    fallback.hidden = Boolean(imageUrl);
-  });
-
-  images.forEach((img, index) => {
-    if (!imageUrl) {
-      img.hidden = true;
-      img.removeAttribute("src");
-      return;
-    }
-
-    img.hidden = false;
-    img.alt = displayName || username || "Líder de presentes";
-
-    const onError = () => {
-      img.hidden = true;
-      if (fallbacks[index]) fallbacks[index].hidden = false;
-    };
-
-    img.onerror = onError;
-
-    if (img.src !== new URL(imageUrl, window.location.href).href) {
-      img.src = imageUrl;
-    }
-  });
-
-  const name = document.getElementById("superCubeName");
-  const score = document.getElementById("superCubeScore");
-
-  if (name) {
-    name.textContent = displayName || username || "TOP PRESENTES";
-  }
-
-  if (score) {
-    const events = Math.max(
-      0,
-      Math.round(Number(item?.gift_events || 0))
-    );
-
-    score.textContent =
-      `${total} presente${total === 1 ? "" : "s"}` +
-      (events > 1 ? ` • ${events} envios` : "");
-  }
-}
 
 function syncTunnelPeople(people) {
   const seen = new Set();
@@ -507,271 +311,6 @@ function tunnelImageEntry(path) {
   return null;
 }
 
-function assetUrl(path) {
-  if (!path) return "";
-  return path.startsWith("/") ? fileUrl(path) : `/assets/${path}`;
-}
-
-function pick(list, avoid = "") {
-  const source = (list || []).filter(Boolean);
-  if (!source.length) return "";
-  const filtered = source.filter(item => item !== avoid);
-  const pool = filtered.length ? filtered : source;
-  return pool[Math.floor(Math.random() * pool.length)];
-}
-
-function clampNumber(value, min, max, fallback) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.max(min, Math.min(max, parsed));
-}
-
-function sameStringList(left, right) {
-  const a = Array.isArray(left) ? left.map(String) : [];
-  const b = Array.isArray(right) ? right.map(String) : [];
-  return a.length === b.length && a.every((item, index) => item === b[index]);
-}
-
-function isTunnelMode() {
-  return visualMode !== "map";
-}
-
-function clearMapForTunnel() {
-  if (!mapEntries.length && mapSignature === "__tunnel__") return;
-  mapEntries = [];
-  mapSignature = "__tunnel__";
-  mapBack.replaceChildren();
-  mapFront.replaceChildren();
-}
-
-function positionTunnelActor() {
-  if (world) world.style.transform = "none";
-  actorLayer.style.setProperty("--actor-x", "0px");
-  actorLayer.style.setProperty("--actor-y", "0px");
-  actorLayer.style.setProperty("--actor-scale", "1");
-}
-
-function syncMusicTracks(tracks) {
-  const next = (Array.isArray(tracks) ? tracks : []).map(String).filter(Boolean);
-  if (sameStringList(next, musicTracks)) return;
-  musicTracks = next;
-  if (!musicTracks.length) {
-    if (musicAudio) musicAudio.pause();
-    musicCurrent = "";
-    return;
-  }
-  if (!musicTracks.includes(musicCurrent)) {
-    playNextMusic(true);
-  }
-}
-
-function ensureMusicAnalyser() {
-  if (!musicAudio || musicAnalyser) return;
-  try {
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextClass) return;
-    musicAudioContext = new AudioContextClass();
-    const source = musicAudioContext.createMediaElementSource(musicAudio);
-    musicAnalyser = musicAudioContext.createAnalyser();
-    musicAnalyser.fftSize = 128;
-    musicAnalyser.smoothingTimeConstant = 0.72;
-    musicFreqData = new Uint8Array(musicAnalyser.frequencyBinCount);
-    source.connect(musicAnalyser);
-    musicAnalyser.connect(musicAudioContext.destination);
-  } catch (err) {
-    console.warn("music analyser unavailable", err);
-    musicAnalyser = null;
-    musicFreqData = null;
-  }
-}
-
-function playNextMusic(force = false) {
-  if (!musicAudio || !musicTracks.length) return;
-  const next = pick(musicTracks, force ? "" : musicCurrent);
-  if (!next) return;
-  if (next !== musicCurrent) {
-    musicCurrent = next;
-    musicAudio.src = fileUrl(next);
-    musicAudio.currentTime = 0;
-  }
-  musicAudio.loop = musicTracks.length < 2;
-  musicAudio.playbackRate = 1;
-  musicAudio.volume = speechBusy ? MUSIC_SPEECH_VOLUME : MUSIC_IDLE_VOLUME;
-  musicAudio.muted = false;
-  ensureMusicAnalyser();
-  musicAudio.play().catch(() => {
-    audioUnlock.hidden = false;
-  });
-}
-
-if (musicAudio) {
-  musicAudio.addEventListener("ended", () => playNextMusic(false));
-}
-
-function updateMusicVolume() {
-  if (!musicAudio || !musicTracks.length) return;
-  if (musicAudio.paused) {
-    playNextMusic(false);
-    return;
-  }
-  const target = reactionBusy ? MUSIC_REACTION_VOLUME : (speechBusy ? MUSIC_SPEECH_VOLUME : MUSIC_IDLE_VOLUME);
-  musicAudio.volume += (target - musicAudio.volume) * 0.055;
-}
-
-function updateMusicEnergy(nowSeconds) {
-  if (musicAnalyser && musicFreqData) {
-    if (musicAudioContext?.state === "suspended") {
-      musicAudioContext.resume().catch(() => {});
-    }
-    musicAnalyser.getByteFrequencyData(musicFreqData);
-    let bassTotal = 0;
-    let fullTotal = 0;
-    const bassBins = Math.min(8, musicFreqData.length);
-    for (let i = 0; i < musicFreqData.length; i += 1) {
-      const value = musicFreqData[i] / 255;
-      fullTotal += value;
-      if (i < bassBins) bassTotal += value;
-    }
-    const nextBass = bassTotal / Math.max(1, bassBins);
-    const nextEnergy = fullTotal / Math.max(1, musicFreqData.length);
-    musicBass += (nextBass - musicBass) * 0.24;
-    musicEnergy += (nextEnergy - musicEnergy) * 0.18;
-    return;
-  }
-  const fallback = 0.28 + Math.sin(nowSeconds * 2.2) * 0.12 + Math.sin(nowSeconds * 5.6) * 0.05;
-  musicBass += (fallback - musicBass) * 0.08;
-  musicEnergy += (fallback * 0.75 - musicEnergy) * 0.08;
-}
-
-function drawCornerSaber(ctx, outer, center, hue, power, time, phase) {
-  ctx.save();
-  ctx.globalCompositeOperation = "lighter";
-  ctx.lineCap = "round";
-  ctx.strokeStyle = `hsla(${hue}, 100%, 52%, ${0.26 + power * 0.18})`;
-  ctx.lineWidth = 31 + power * 12;
-  ctx.beginPath();
-  ctx.moveTo(outer.x, outer.y);
-  ctx.lineTo(center.x, center.y);
-  ctx.stroke();
-  ctx.strokeStyle = `hsla(${hue + 14}, 100%, 68%, ${0.74 + power * 0.16})`;
-  ctx.lineWidth = 13 + power * 5;
-  ctx.beginPath();
-  ctx.moveTo(outer.x, outer.y);
-  ctx.lineTo(center.x, center.y);
-  ctx.stroke();
-  ctx.strokeStyle = `rgba(255,255,255,${0.76 + power * 0.18})`;
-  ctx.lineWidth = 3 + power * 2;
-  ctx.beginPath();
-  ctx.moveTo(outer.x, outer.y);
-  ctx.lineTo(center.x, center.y);
-  ctx.stroke();
-
-  const dx = center.x - outer.x;
-  const dy = center.y - outer.y;
-  for (let i = 0; i < 4; i += 1) {
-    const t = (time * (0.42 + power * 0.55) + phase + i * 0.25) % 1;
-    const start = Math.max(0, t - 0.055);
-    const end = Math.min(1, t + 0.055);
-    const x1 = outer.x + dx * start;
-    const y1 = outer.y + dy * start;
-    const x2 = outer.x + dx * end;
-    const y2 = outer.y + dy * end;
-    ctx.strokeStyle = `rgba(255,255,255,${0.42 + power * 0.34})`;
-    ctx.lineWidth = 8 + power * 4;
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
-    ctx.fillStyle = `hsla(${hue + 25}, 100%, 76%, ${0.34 + power * 0.26})`;
-    ctx.beginPath();
-    ctx.arc(x2, y2, 5 + power * 5, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.restore();
-}
-
-function tunnelRingPoint(anchor, center, scale, wobble) {
-  return {
-    x: center.x + (anchor.x - center.x) * scale + wobble.x,
-    y: center.y + (anchor.y - center.y) * scale + wobble.y,
-  };
-}
-
-function rotateAround(point, center, angle) {
-  const cos = Math.cos(angle);
-  const sin = Math.sin(angle);
-  const dx = point.x - center.x;
-  const dy = point.y - center.y;
-  return {
-    x: center.x + dx * cos - dy * sin,
-    y: center.y + dx * sin + dy * cos,
-  };
-}
-
-function drawTunnelRing(ctx, anchors, center, scale, hue, alpha, width, time, index) {
-  const wobbleAmp = 0.8 + scale * 1.25;
-  const points = anchors.map((anchor, pos) => tunnelRingPoint(anchor, center, scale, {
-    x: Math.sin(time * 1.3 + index * 0.7 + pos * 1.9) * wobbleAmp,
-    y: Math.cos(time * 1.1 + index * 0.8 + pos * 1.6) * wobbleAmp,
-  }));
-  ctx.save();
-  ctx.globalCompositeOperation = "lighter";
-  ctx.lineJoin = "round";
-  ctx.lineCap = "round";
-  ctx.strokeStyle = `hsla(${hue}, 100%, 58%, ${alpha})`;
-  ctx.lineWidth = width;
-  ctx.beginPath();
-  ctx.moveTo(points[0].x, points[0].y);
-  for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i].x, points[i].y);
-  ctx.closePath();
-  ctx.stroke();
-  ctx.strokeStyle = `rgba(255,255,255,${alpha * 0.42})`;
-  ctx.lineWidth = Math.max(0.8, width * 0.22);
-  ctx.beginPath();
-  ctx.moveTo(points[0].x, points[0].y);
-  for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i].x, points[i].y);
-  ctx.closePath();
-  ctx.stroke();
-  ctx.restore();
-}
-
-function rectanglePerimeterPoint(rect, t) {
-  const value = ((Number(t) % 1) + 1) % 1;
-  const side = value * 4;
-  if (side < 1) {
-    return {
-      x: rect.left + (rect.right - rect.left) * side,
-      y: rect.top,
-    };
-  }
-  if (side < 2) {
-    return {
-      x: rect.right,
-      y: rect.top + (rect.bottom - rect.top) * (side - 1),
-    };
-  }
-  if (side < 3) {
-    return {
-      x: rect.right - (rect.right - rect.left) * (side - 2),
-      y: rect.bottom,
-    };
-  }
-  return {
-    x: rect.left,
-    y: rect.bottom - (rect.bottom - rect.top) * (side - 3),
-  };
-}
-
-function distanceToNearestCornerPhase(t) {
-  const value = ((Number(t) % 1) + 1) % 1;
-  return Math.min(
-    Math.abs(value - 0),
-    Math.abs(value - 0.25),
-    Math.abs(value - 0.5),
-    Math.abs(value - 0.75),
-    Math.abs(value - 1),
-  );
-}
 
 function drawTunnelProfile(ctx, person, x, y, radius, hue, alpha) {
   const entry = tunnelImageEntry(person.profile);
@@ -806,1875 +345,493 @@ function drawTunnelProfile(ctx, person, x, y, radius, hue, alpha) {
   return true;
 }
 
-function drawTunnelDepthLines(ctx, center, hue, power, time, wallOrbit) {
-  const outer = { left: -20, top: -20, right: TUNNEL_W + 20, bottom: TUNNEL_H + 20 };
-  const innerW = 34 + power * 20;
-  const innerH = 56 + power * 28;
-  const inner = {
-    left: center.x - innerW,
-    top: center.y - innerH,
-    right: center.x + innerW,
-    bottom: center.y + innerH,
-  };
-  const count = 38;
-  const maxPhotoSlots = Math.min(10, tunnelPeople.length);
-  const photoEvery = maxPhotoSlots ? Math.max(1, Math.floor(count / maxPhotoSlots)) : 0;
-  ctx.save();
-  ctx.globalCompositeOperation = "lighter";
-  ctx.lineCap = "round";
-  for (let i = 0; i < count; i += 1) {
-    const t = (i / count + wallOrbit + Math.sin(time * 0.8 + i * 0.31) * 0.004) % 1;
-    const cornerGap = distanceToNearestCornerPhase(t);
-    const avoidBaton = cornerGap < 0.018;
-    if (avoidBaton) continue;
-    const start = rectanglePerimeterPoint(outer, t);
-    const end = rectanglePerimeterPoint(inner, t + Math.sin(time * 0.55 + i) * 0.006);
-    const localHue = (hue + i * 11 + wallOrbit * 260) % 360;
-    const alpha = 0.1 + power * 0.14 + Math.min(0.08, cornerGap * 1.2);
-    ctx.strokeStyle = `hsla(${localHue}, 100%, 64%, ${alpha})`;
-    ctx.lineWidth = 0.9 + power * 1.45;
-    ctx.beginPath();
-    ctx.moveTo(start.x, start.y);
-    ctx.lineTo(end.x, end.y);
-    ctx.stroke();
+function assetUrl(path) {
+  if (!path) return "";
+  return path.startsWith("/") ? fileUrl(path) : `/assets/${path}`;
+}
 
-    const travel = (time * 0.42 + i * 0.047) % 1;
-    const sparkX = start.x + (end.x - start.x) * travel;
-    const sparkY = start.y + (end.y - start.y) * travel;
-    const personSlot = photoEvery && i % photoEvery === 0;
-    const person = personSlot ? tunnelPeople[Math.floor(i / photoEvery) % tunnelPeople.length] : null;
-    const perspective = 1 - travel;
-    const photoRadius = (person?.weight > 1 ? 8.5 : 7.2) + perspective * 12 + power * 2.8;
-    const photoAlpha = 0.28 + perspective * 0.45 + power * 0.18;
-    if (!person || !drawTunnelProfile(ctx, person, sparkX, sparkY, photoRadius, localHue + 24, photoAlpha)) {
-      ctx.fillStyle = `hsla(${localHue + 24}, 100%, 78%, ${0.16 + power * 0.2})`;
-      ctx.beginPath();
-      ctx.arc(sparkX, sparkY, 1.8 + power * 2.4, 0, Math.PI * 2);
-      ctx.fill();
+function pick(list, avoid = "") {
+  const source = (list || []).filter(Boolean);
+  if (!source.length) return "";
+  const filtered = source.filter(item => item !== avoid);
+  const pool = filtered.length ? filtered : source;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function clampNumber(value, min, max, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function sameStringList(left, right) {
+  const a = Array.isArray(left) ? left.map(String) : [];
+  const b = Array.isArray(right) ? right.map(String) : [];
+  return a.length === b.length && a.every((item, index) => item === b[index]);
+}
+
+function isTunnelMode() {
+  return visualMode !== "map";
+}
+
+
+function normalizeLiveCameraConfig(state = {}) {
+  const farZoomMin = clampNumber(state.camera_far_zoom_min, 0.68, 0.98, 0.82);
+  const mediumMax = clampNumber(state.camera_medium_zoom_max, 1.08, 1.30, 1.22);
+  const closeMax = Math.max(mediumMax + 0.03, clampNumber(state.camera_close_zoom_max, 1.18, 1.48, 1.40));
+  const transitionMin = clampNumber(state.camera_transition_min, 1.5, 12, 3);
+  const transitionMax = Math.max(transitionMin, clampNumber(state.camera_transition_max, transitionMin, 15, 7));
+  const responsesMin = Math.round(clampNumber(state.camera_responses_min, 1, 8, 2));
+  const responsesMax = Math.max(responsesMin, Math.round(clampNumber(state.camera_responses_max, responsesMin, 12, 5)));
+  liveCameraConfig = {
+    enabled: state.dynamic_camera_enabled !== false,
+    manualShot: ["auto", "distant", "full", "medium", "close"].includes(String(state.camera_manual_shot || "auto"))
+      ? String(state.camera_manual_shot || "auto") : "auto",
+    farZoomMin,
+    mediumZoomMax: mediumMax,
+    closeZoomMax: closeMax,
+    xMax: clampNumber(state.camera_x_max, 0, 60, 22),
+    closeYMax: clampNumber(state.camera_close_y_max, 40, 260, 175),
+    transitionMin, transitionMax, responsesMin, responsesMax,
+  };
+}
+
+function cameraShotTarget(kind) {
+  const cfg = liveCameraConfig;
+  const x = randomBetween(-cfg.xMax, cfg.xMax);
+  if (kind === "distant") {
+    return {
+      kind,
+      zoom: randomBetween(
+        cfg.farZoomMin,
+        Math.min(0.98, cfg.farZoomMin + 0.08)
+      ),
+      x: x * 0.28,
+      y: randomBetween(-22, 18),
+    };
+  }
+  if (kind === "close") {
+    return {
+      kind,
+      zoom: randomBetween(Math.max(1.20, cfg.mediumZoomMax + 0.03), cfg.closeZoomMax),
+      x,
+      y: randomBetween(cfg.closeYMax * 0.66, cfg.closeYMax),
+    };
+  }
+  if (kind === "medium") {
+    return {
+      kind,
+      zoom: randomBetween(1.08, cfg.mediumZoomMax),
+      x: x * 0.82,
+      y: randomBetween(cfg.closeYMax * 0.10, cfg.closeYMax * 0.26),
+    };
+  }
+  return { kind: "full", zoom: randomBetween(1.0, 1.05), x: x * 0.45, y: randomBetween(-10, 14) };
+}
+
+function chooseNextCameraShot(forceKind = "") {
+  let kind = String(forceKind || "").trim().toLowerCase();
+  if (!["distant", "full", "medium", "close"].includes(kind)) {
+    const choices = liveCamera.shot === "close"
+      ? ["full", "medium", "distant", "full"]
+      : liveCamera.shot === "medium"
+        ? ["full", "close", "distant", "full", "close"]
+        : liveCamera.shot === "distant"
+          ? ["full", "medium", "close", "full", "medium"]
+          : ["medium", "close", "distant", "medium", "close", "full"];
+    kind = choices[Math.floor(Math.random() * choices.length)] || "full";
+  }
+  const target = cameraShotTarget(kind);
+  liveCamera.shot = target.kind;
+  liveCamera.targetZoom = target.zoom;
+  liveCamera.targetX = target.x;
+  liveCamera.targetY = target.y;
+  liveCamera.transitionSeconds = randomBetween(liveCameraConfig.transitionMin, liveCameraConfig.transitionMax);
+  liveCamera.responsesLeft = randomIntInclusive(liveCameraConfig.responsesMin, liveCameraConfig.responsesMax);
+}
+
+function resetDynamicLiveCamera() {
+  Object.assign(liveCamera, {
+    currentZoom: 1, targetZoom: 1,
+    currentX: 0, targetX: 0,
+    currentY: 0, targetY: 0,
+    shot: "full",
+    responsesLeft: randomIntInclusive(liveCameraConfig.responsesMin, liveCameraConfig.responsesMax),
+    transitionSeconds: Math.max(2, liveCameraConfig.transitionMin),
+    lastFrameAt: 0,
+    initialized: true,
+  });
+  if (cameraLayer) {
+    cameraLayer.style.transform = "translate3d(0px,0px,0) scale(1)";
+  }
+  if (world) {
+    world.style.removeProperty("--tunnel-world-transform");
+  }
+  if (stage) {
+    stage.dataset.cameraDistance = "normal";
+  }
+}
+
+function onSpeechCompletedForCamera() {
+  if (!isTunnelMode() || !liveCameraConfig.enabled || liveCameraConfig.manualShot !== "auto") return;
+  liveCamera.responsesLeft -= 1;
+  if (liveCamera.responsesLeft <= 0) chooseNextCameraShot();
+}
+
+function updateDynamicLiveCamera(now) {
+  if (!cameraLayer) return;
+  if (!isTunnelMode() || !liveCameraConfig.enabled) {
+    liveCamera.targetZoom = 1; liveCamera.targetX = 0; liveCamera.targetY = 0;
+  } else {
+    if (!liveCamera.initialized) resetDynamicLiveCamera();
+    if (liveCameraConfig.manualShot !== liveCamera.lastManualShot) {
+      liveCamera.lastManualShot = liveCameraConfig.manualShot;
+      chooseNextCameraShot(liveCameraConfig.manualShot === "auto" ? "" : liveCameraConfig.manualShot);
     }
   }
-  ctx.restore();
+  if (!liveCamera.lastFrameAt) liveCamera.lastFrameAt = now;
+  const dt = Math.min(0.08, Math.max(0.001, (now - liveCamera.lastFrameAt) / 1000));
+  liveCamera.lastFrameAt = now;
+  const smoothing = 1 - Math.exp(-dt * (4.2 / Math.max(1.5, Number(liveCamera.transitionSeconds || 5))));
+  liveCamera.currentZoom += (liveCamera.targetZoom - liveCamera.currentZoom) * smoothing;
+  liveCamera.currentX += (liveCamera.targetX - liveCamera.currentX) * smoothing;
+  liveCamera.currentY += (liveCamera.targetY - liveCamera.currentY) * smoothing;
+  const cameraZoom = Number(liveCamera.currentZoom || 1);
+  const cameraX = Number(liveCamera.currentX || 0);
+  const cameraY = Number(liveCamera.currentY || 0);
+
+  if (isTunnelMode() && cameraZoom < 0.999) {
+    // DISTANTE = câmera recua dentro do mundo, não reduz a "tela".
+    // Túnel/plasma continua infinito; world, piso e paredes recuam juntos.
+    cameraLayer.style.transform =
+      "translate3d(0px, 0px, 0) scale(1)";
+
+    if (world) {
+      world.style.setProperty(
+        "--tunnel-world-transform",
+        `translate3d(${cameraX.toFixed(2)}px, ${(cameraY * 0.35).toFixed(2)}px, 0) scale(${cameraZoom.toFixed(5)})`
+      );
+    }
+
+    stage.dataset.cameraDistance = "distant";
+  } else {
+    if (world) {
+      world.style.removeProperty("--tunnel-world-transform");
+    }
+
+    cameraLayer.style.transform =
+      `translate3d(${cameraX.toFixed(2)}px, ${cameraY.toFixed(2)}px, 0) scale(${cameraZoom.toFixed(5)})`;
+
+    stage.dataset.cameraDistance = "normal";
+  }
 }
+
+
+function clearMapForTunnel() {
+  if (!mapEntries.length && mapSignature === "__tunnel__") return;
+  mapEntries = [];
+  mapSignature = "__tunnel__";
+  mapBack.replaceChildren();
+  mapFront.replaceChildren();
+}
+
+function positionTunnelActor() {
+  if (world) world.style.transform = "none";
+  actorLayer.style.setProperty("--actor-x", "0px");
+  actorLayer.style.setProperty("--actor-y", "0px");
+  actorLayer.style.setProperty("--actor-scale", "1");
+}
+
+function maintainLiveAvatarScene() {
+  currentMap = null;
+  clearMapForTunnel();
+  positionTunnelActor();
+
+  if (speechBusy || reactionBusy) return;
+
+  if (currentScene === "idle" && idleFullPlay && activeVideo?.ended) {
+    currentScene = "";
+    currentVideo = "";
+    idleFullPlay = false;
+  }
+
+  if (!currentVideo || currentScene !== "idle") {
+    setScene("idle").catch(console.warn);
+  }
+}
+
+function syncMusicTracks(tracks) {
+  const next = (Array.isArray(tracks) ? tracks : []).map(String).filter(Boolean);
+  if (sameStringList(next, musicTracks)) return;
+  musicTracks = next;
+  if (!musicTracks.length) {
+    if (musicAudio && !manualSpeechMusicActive) musicAudio.pause();
+    musicCurrent = "";
+    return;
+  }
+  if (!manualSpeechMusicActive && !musicTracks.includes(musicCurrent)) {
+    playNextMusic(true);
+  }
+}
+
+function syncManualMusicTracks(tracks) {
+  manualMusicTracks = (Array.isArray(tracks) ? tracks : [])
+    .map(String)
+    .filter(Boolean);
+}
+
+function runtimeVolume(key, fallback) {
+  return Math.max(0, Math.min(1, runtimeNumber(key, fallback)));
+}
+
+function targetMusicVolume() {
+  if (reactionBusy) return MUSIC_REACTION_VOLUME;
+  return speechBusy
+    ? runtimeVolume("music_speech_volume", MUSIC_SPEECH_VOLUME)
+    : runtimeVolume("music_idle_volume", MUSIC_IDLE_VOLUME);
+}
+
+function ensureMusicAnalyser() {
+  if (!musicAudio || musicAnalyser) return;
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    musicAudioContext = new AudioContextClass();
+    const source = musicAudioContext.createMediaElementSource(musicAudio);
+    musicAnalyser = musicAudioContext.createAnalyser();
+    musicAnalyser.fftSize = 128;
+    musicAnalyser.smoothingTimeConstant = 0.72;
+    musicFreqData = new Uint8Array(musicAnalyser.frequencyBinCount);
+    source.connect(musicAnalyser);
+    musicAnalyser.connect(musicAudioContext.destination);
+  } catch (err) {
+    console.warn("music analyser unavailable", err);
+    musicAnalyser = null;
+    musicFreqData = null;
+  }
+}
+
+function playNextMusic(force = false) {
+  if (!musicAudio) return;
+  if (manualSpeechMusicActive && manualSpeechMusicTrack) {
+    playMusicTrack(manualSpeechMusicTrack, { loop: true, restart: false });
+    return;
+  }
+  if (!musicTracks.length) return;
+  const next = pick(musicTracks, force ? "" : musicCurrent);
+  if (!next) return;
+  playMusicTrack(next, { loop: musicTracks.length < 2, restart: next !== musicCurrent });
+}
+
+function playMusicTrack(track, { loop = false, restart = false } = {}) {
+  if (!musicAudio || !track) return;
+  if (track !== musicCurrent) {
+    musicCurrent = track;
+    musicAudio.src = fileUrl(track);
+    restart = true;
+  }
+  if (restart) {
+    try {
+      musicAudio.currentTime = 0;
+    } catch (err) {
+      console.warn("music rewind failed", err);
+    }
+  }
+  musicAudio.loop = Boolean(loop);
+  musicAudio.playbackRate = 1;
+  musicAudio.volume = targetMusicVolume();
+  musicAudio.muted = false;
+  ensureMusicAnalyser();
+  musicAudio.play().catch(() => {
+    audioUnlock.hidden = false;
+  });
+}
+
+if (musicAudio) {
+  musicAudio.addEventListener("ended", () => playNextMusic(false));
+}
+
+function updateMusicVolume() {
+  if (!musicAudio || (!musicTracks.length && !manualSpeechMusicTrack)) return;
+  if (musicAudio.paused) {
+    if (manualSpeechMusicActive && manualSpeechMusicTrack) {
+      playMusicTrack(manualSpeechMusicTrack, { loop: true, restart: false });
+      return;
+    }
+    playNextMusic(false);
+    return;
+  }
+  const target = targetMusicVolume();
+  musicAudio.volume += (target - musicAudio.volume) * 0.055;
+}
+
+function updateMusicEnergy(nowSeconds) {
+  if (musicAnalyser && musicFreqData) {
+    if (musicAudioContext?.state === "suspended") {
+      musicAudioContext.resume().catch(() => {});
+    }
+    musicAnalyser.getByteFrequencyData(musicFreqData);
+    let bassTotal = 0;
+    let fullTotal = 0;
+    const bassBins = Math.min(8, musicFreqData.length);
+    for (let i = 0; i < musicFreqData.length; i += 1) {
+      const value = musicFreqData[i] / 255;
+      fullTotal += value;
+      if (i < bassBins) bassTotal += value;
+    }
+    const nextBass = bassTotal / Math.max(1, bassBins);
+    const nextEnergy = fullTotal / Math.max(1, musicFreqData.length);
+    musicBass += (nextBass - musicBass) * 0.24;
+    musicEnergy += (nextEnergy - musicEnergy) * 0.18;
+    return;
+  }
+  const fallback = 0.28 + Math.sin(nowSeconds * 2.2) * 0.12 + Math.sin(nowSeconds * 5.6) * 0.05;
+  musicBass += (fallback - musicBass) * 0.08;
+  musicEnergy += (fallback * 0.75 - musicEnergy) * 0.08;
+}
+
+
 function clearTunnelFloorOverlay() {
   if (!tunnelFloorCtx || !tunnelFloorCanvas) return;
   tunnelFloorCtx.setTransform(1, 0, 0, 1, 0, 0);
   tunnelFloorCtx.clearRect(0, 0, TUNNEL_W, TUNNEL_H);
 }
 
-function drawOrbitalFloorOverlay(timeMs = performance.now()) {
-  if (!tunnelFloorCtx || !tunnelFloorCanvas) return;
 
-  const ctx = tunnelFloorCtx;
-  const w = TUNNEL_W;
-  const h = TUNNEL_H;
-  const time = Number(timeMs || 0) * 0.001;
-  const energy = Math.max(0, Math.min(1, Number(musicEnergy || 0)));
-  const bass = Math.max(0, Math.min(1, Number(musicBass || 0)));
 
-  const floorHorizonY = h * 0.675;
-  const floorBottom = h * 1.035;
-  const cx = w * 0.5;
-  const rows = 11;
-  const cols = 7;
-  const beatStep = Math.floor(time * (0.45 + bass * 1.35));
 
-  ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-  ctx.globalCompositeOperation = "source-over";
-  ctx.globalAlpha = 1;
 
-  // Máscara/base totalmente opaca.
-  const base = ctx.createLinearGradient(0, floorHorizonY, 0, h);
-  base.addColorStop(0, "#03060e");
-  base.addColorStop(0.18, "#02040a");
-  base.addColorStop(1, "#000003");
 
-  ctx.fillStyle = base;
-  ctx.beginPath();
-  ctx.moveTo(cx - 36, floorHorizonY);
-  ctx.lineTo(cx + 36, floorHorizonY);
-  ctx.lineTo(w * 1.10, floorBottom);
-  ctx.lineTo(w * -0.10, floorBottom);
-  ctx.closePath();
-  ctx.fill();
 
-  const people = Array.isArray(tunnelPeople) ? tunnelPeople : [];
-  const giftPeople = people
-    .filter(person =>
-      Number(person?.weight || 1) > 1 &&
-      String(person?.profile || "").trim()
-    )
-    .slice(0, 14);
 
-  const slots = [];
-  for (let row = 2; row < rows; row += 1) {
-    for (let col = 0; col < cols; col += 1) {
-      if ((row * 3 + col * 5) % 4 === 0) {
-        slots.push({ row, col });
-      }
-    }
-  }
 
-  const giftTileMap = new Map();
-  for (let i = 0; i < Math.min(giftPeople.length, slots.length); i += 1) {
-    giftTileMap.set(`${slots[i].row}:${slots[i].col}`, giftPeople[i]);
-  }
 
-  function tilePath(x00, y0, x01, x11, y1, x10) {
-    ctx.beginPath();
-    ctx.moveTo(x00, y0);
-    ctx.lineTo(x01, y0);
-    ctx.lineTo(x11, y1);
-    ctx.lineTo(x10, y1);
-    ctx.closePath();
-  }
 
-  function drawPersonTile(person, x00, y0, x01, x11, y1, x10, hue) {
-    const entry = tunnelImageEntry(person?.profile);
-    if (!entry) return false;
 
-    const img = entry.img;
-    const iw = img.naturalWidth || img.width;
-    const ih = img.naturalHeight || img.height;
-    if (!iw || !ih) return false;
 
-    const side = Math.min(iw, ih);
-    const sx = (iw - side) * 0.5;
-    const sy = (ih - side) * 0.5;
 
-    const minX = Math.min(x00, x01, x10, x11);
-    const maxX = Math.max(x00, x01, x10, x11);
-    const minY = y0;
-    const maxY = y1;
 
-    ctx.save();
-    tilePath(x00, y0, x01, x11, y1, x10);
-    ctx.clip();
-
-    // Somente a FOTO possui transparência.
-    ctx.globalAlpha = 0.34 + energy * 0.10;
-    ctx.drawImage(
-      img,
-      sx, sy, side, side,
-      minX, minY,
-      Math.max(1, maxX - minX),
-      Math.max(1, maxY - minY)
-    );
-
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = `hsla(${hue},92%,48%,0.30)`;
-    ctx.fillRect(
-      minX, minY,
-      Math.max(1, maxX - minX),
-      Math.max(1, maxY - minY)
-    );
-
-    const shade = ctx.createLinearGradient(0, minY, 0, maxY);
-    shade.addColorStop(0, "rgba(0,0,0,.02)");
-    shade.addColorStop(1, "rgba(0,0,0,.26)");
-    ctx.fillStyle = shade;
-    ctx.fillRect(
-      minX, minY,
-      Math.max(1, maxX - minX),
-      Math.max(1, maxY - minY)
-    );
-
-    ctx.restore();
-    return true;
-  }
-
-  function drawMotif(cxTile, cyTile, tileW, tileH, seed, hue, weak = false) {
-    const mode = Math.abs(seed) % 8;
-    const size = Math.max(3.5, Math.min(tileW, tileH) * 0.20);
-
-    ctx.save();
-    ctx.globalAlpha = weak ? 0.12 : 0.32 + energy * 0.18;
-    ctx.lineWidth = Math.max(0.7, size * 0.12);
-    ctx.strokeStyle = `hsla(${(hue + 115) % 360},100%,86%,.95)`;
-    ctx.fillStyle = `hsla(${(hue + 115) % 360},100%,86%,.90)`;
-
-    if (mode === 0) {
-      ctx.beginPath();
-      ctx.arc(cxTile, cyTile, size, 0, Math.PI * 2);
-      ctx.stroke();
-    } else if (mode === 1) {
-      ctx.beginPath();
-      ctx.moveTo(cxTile, cyTile - size);
-      ctx.lineTo(cxTile + size * 0.92, cyTile + size * 0.82);
-      ctx.lineTo(cxTile - size * 0.92, cyTile + size * 0.82);
-      ctx.closePath();
-      ctx.stroke();
-    } else if (mode === 2) {
-      ctx.beginPath();
-      ctx.moveTo(cxTile, cyTile - size);
-      ctx.lineTo(cxTile + size, cyTile);
-      ctx.lineTo(cxTile, cyTile + size);
-      ctx.lineTo(cxTile - size, cyTile);
-      ctx.closePath();
-      ctx.stroke();
-    } else if (mode === 3) {
-      ctx.strokeRect(
-        cxTile - size * 0.84,
-        cyTile - size * 0.84,
-        size * 1.68,
-        size * 1.68
-      );
-    } else if (mode === 4) {
-      const glyphs = ["✨", "🔥", "💎", "😀"];
-      ctx.font = `${Math.max(9, size * 1.55)}px sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(glyphs[Math.abs(seed) % glyphs.length], cxTile, cyTile);
-    } else {
-      ctx.beginPath();
-      ctx.arc(cxTile, cyTile, size * 0.42, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-
-    ctx.restore();
-  }
-
-  for (let row = 0; row < rows; row += 1) {
-    const p0 = row / rows;
-    const p1 = (row + 1) / rows;
-
-    const y0 =
-      floorHorizonY +
-      Math.pow(p0, 1.78) * (floorBottom - floorHorizonY);
-    const y1 =
-      floorHorizonY +
-      Math.pow(p1, 1.78) * (floorBottom - floorHorizonY);
-
-    const half0 = 36 + Math.pow(p0, 1.14) * w * 0.60;
-    const half1 = 36 + Math.pow(p1, 1.14) * w * 0.60;
-
-    for (let col = 0; col < cols; col += 1) {
-      const u0 = col / cols;
-      const u1 = (col + 1) / cols;
-
-      const x00 = cx - half0 + half0 * 2 * u0;
-      const x01 = cx - half0 + half0 * 2 * u1;
-      const x10 = cx - half1 + half1 * 2 * u0;
-      const x11 = cx - half1 + half1 * 2 * u1;
-
-      const seed = row * 47 + col * 83 + beatStep * 29;
-      const hue = (seed * 17 + tunnelHue + bass * 64) % 360;
-      const light =
-        27 +
-        energy * 24 +
-        ((row + col + beatStep) % 3) * 4;
-
-      tilePath(x00, y0, x01, x11, y1, x10);
-      ctx.globalAlpha = 1;
-      ctx.globalCompositeOperation = "source-over";
-      ctx.fillStyle = `hsl(${hue},88%,${light}%)`;
-      ctx.fill();
-
-      const person = giftTileMap.get(`${row}:${col}`) || null;
-      if (person) {
-        drawPersonTile(person, x00, y0, x01, x11, y1, x10, hue);
-      }
-
-      tilePath(x00, y0, x01, x11, y1, x10);
-      ctx.strokeStyle = `rgba(255,255,255,${0.055 + energy * 0.075})`;
-      ctx.lineWidth = 0.55;
-      ctx.stroke();
-
-      const cxTile = (x00 + x01 + x10 + x11) * 0.25;
-      const cyTile = (y0 + y0 + y1 + y1) * 0.25;
-      const tileW = Math.abs((x01 - x00) + (x11 - x10)) * 0.5;
-      const tileH = Math.abs(y1 - y0);
-
-      drawMotif(
-        cxTile, cyTile, tileW, tileH,
-        seed, hue, Boolean(person)
-      );
-    }
-  }
-
-  const reflection = ctx.createLinearGradient(0, floorHorizonY, 0, h);
-  reflection.addColorStop(
-    0,
-    `hsla(${195 + tunnelHue * 0.08},100%,58%,${0.08 + energy * 0.04})`
-  );
-  reflection.addColorStop(0.22, "rgba(0,0,0,0)");
-  reflection.addColorStop(1, "rgba(0,0,0,.18)");
-  ctx.fillStyle = reflection;
-  ctx.fillRect(0, floorHorizonY, w, h - floorHorizonY);
-
-  ctx.restore();
-}
-
-
-
-
-
-
-
-
-const GIFT_WALL_LEVELS = 6;
-const GIFT_WALL_SLOTS_PER_LEVEL = 16;
-const GIFT_WALL_CAPACITY = GIFT_WALL_LEVELS * GIFT_WALL_SLOTS_PER_LEVEL;
-
-function clearTunnelWallOverlay() {
-  if (!tunnelWallCtx || !tunnelWallCanvas) return;
-  tunnelWallCtx.setTransform(1, 0, 0, 1, 0, 0);
-  tunnelWallCtx.clearRect(0, 0, TUNNEL_W, TUNNEL_H);
-}
-
-function syncGiftWall(items) {
-  const source = Array.isArray(items) ? items : [];
-  const next = source
-    .filter(item => item && Number.isFinite(Number(item.slot)))
-    .map(item => ({
-      id: String(item.id || ""),
-      slot: Math.max(
-        0,
-        Math.min(
-          GIFT_WALL_CAPACITY - 1,
-          Math.round(Number(item.slot || 0))
-        )
-      ),
-      username: String(item.username || ""),
-      displayName: String(item.display_name || item.username || ""),
-      profile: String(item.profile_image || item.avatar_url || ""),
-      giftName: String(item.gift_name || item.text || "presente"),
-      count: Math.max(1, Math.round(Number(item.count || 1))),
-      createdAt: Number(item.created_at || 0),
-    }));
-
-  const signature = next
-    .map(item => `${item.slot}:${item.id}:${item.profile}:${item.createdAt}`)
-    .join("|");
-
-  if (signature === giftWallSignature) return;
-
-  giftWallSignature = signature;
-  giftWall = next;
-
-  for (const item of giftWall) {
-    if (item.profile) preloadTunnelImage(item.profile);
-  }
-}
-
-function drawGiftWallOverlay(timeMs = performance.now()) {
-  if (!tunnelWallCtx || !tunnelWallCanvas) return;
-
-  const ctx = tunnelWallCtx;
-  const w = TUNNEL_W;
-  const h = TUNNEL_H;
-  const time = Number(timeMs || 0) * 0.001;
-  const epochNow = Date.now() * 0.001;
-  const energy = Math.max(0, Math.min(1, Number(musicEnergy || 0)));
-  const bass = Math.max(0, Math.min(1, Number(musicBass || 0)));
-
-  const previewGuides =
-    new URLSearchParams(window.location.search).get("preview") === "1";
-
-  ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-  ctx.globalCompositeOperation = "source-over";
-  ctx.globalAlpha = 1;
-
-  // Mesmos parâmetros do piso da Catedral Orbital.
-  const cx = w * 0.5;
-  const floorHorizonY = h * 0.675;
-  const floorBottom = h * 1.035;
-  const floorRows = 11;
-  const floorCols = 7;
-
-  // Oito segmentos contínuos ao longo de cada lateral.
-  const wallRows = [9, 8, 7, 6, 5, 4, 3, 2];
-
-  const giftsBySlot = new Map();
-  for (const item of giftWall) {
-    giftsBySlot.set(Number(item.slot || 0), item);
-  }
-
-  function floorY(p) {
-    return (
-      floorHorizonY +
-      Math.pow(p, 1.78) * (floorBottom - floorHorizonY)
-    );
-  }
-
-  function floorHalfWidth(p) {
-    return 36 + Math.pow(p, 1.14) * w * 0.60;
-  }
-
-  function floorTileWidth(p) {
-    return (floorHalfWidth(p) * 2) / floorCols;
-  }
-
-  // Mais alto que a v3: aproxima visualmente o bloco de um quadrado.
-  function wallHeightAt(p) {
-    return Math.max(8, floorTileWidth(p) * 0.66);
-  }
-
-  // Inclinação lateral discreta. A base continua exatamente na borda do piso.
-  function wallLeanAt(p) {
-    return Math.max(1.2, floorTileWidth(p) * 0.085);
-  }
-
-  function floorEdgePoint(side, p) {
-    const half = floorHalfWidth(p);
-    return {
-      x: cx + (side === "left" ? -half : half),
-      y: floorY(p),
-    };
-  }
-
-  // Ponto de uma "linha horizontal" da parede.
-  // level=0 coincide com o piso.
-  // level=1 é o topo da primeira fileira, etc.
-  function wallBoundaryPoint(side, p, level) {
-    const base = floorEdgePoint(side, p);
-    const dir = side === "left" ? -1 : 1;
-
-    return {
-      x: base.x + dir * wallLeanAt(p) * level,
-      y: base.y - wallHeightAt(p) * level,
-    };
-  }
-
-  function wallQuad(side, localSlot, level) {
-    const row = wallRows[Math.max(0, Math.min(7, localSlot))];
-    const p0 = row / floorRows;
-    const p1 = (row + 1) / floorRows;
-
-    const lower0 = wallBoundaryPoint(side, p0, level);
-    const lower1 = wallBoundaryPoint(side, p1, level);
-    const upper1 = wallBoundaryPoint(side, p1, level + 1);
-    const upper0 = wallBoundaryPoint(side, p0, level + 1);
-
-    // Blocos adjacentes compartilham exatamente estes vértices.
-    return [lower0, lower1, upper1, upper0];
-  }
-
-  function pathQuad(points) {
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
-    ctx.lineTo(points[1].x, points[1].y);
-    ctx.lineTo(points[2].x, points[2].y);
-    ctx.lineTo(points[3].x, points[3].y);
-    ctx.closePath();
-  }
-
-  function lerpPoint(a, b, t) {
-    return {
-      x: a.x + (b.x - a.x) * t,
-      y: a.y + (b.y - a.y) * t,
-    };
-  }
-
-  function quadCenter(points) {
-    const bottom = lerpPoint(points[0], points[1], 0.5);
-    const top = lerpPoint(points[3], points[2], 0.5);
-    return lerpPoint(bottom, top, 0.5);
-  }
-
-  function scaledQuad(points, factor) {
-    const center = quadCenter(points);
-    return points.map(point => ({
-      x: center.x + (point.x - center.x) * factor,
-      y: center.y + (point.y - center.y) * factor,
-    }));
-  }
-
-  function distance(a, b) {
-    return Math.hypot(b.x - a.x, b.y - a.y);
-  }
-
-  function initialsFor(item) {
-    const label = String(
-      item.displayName || item.username || "?"
-    ).trim();
-
-    if (!label) return "?";
-
-    const parts = label.split(/\s+/).filter(Boolean);
-
-    if (parts.length >= 2) {
-      return (
-        String(parts[0][0] || "") +
-        String(parts[parts.length - 1][0] || "")
-      ).toUpperCase();
-    }
-
-    return label.slice(0, 2).toUpperCase();
-  }
-
-  function drawPreviewGuide(points, side, localSlot, level) {
-    pathQuad(points);
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = "rgb(6,9,15)";
-    ctx.fill();
-
-    pathQuad(points);
-    ctx.strokeStyle =
-      level === 0
-        ? "rgba(255,255,255,0.30)"
-        : "rgba(255,255,255,0.16)";
-    ctx.lineWidth = 0.75;
-    ctx.stroke();
-
-    // Para não poluir a prévia, texto apenas na fileira inferior.
-    if (level !== 0) return;
-
-    const center = quadCenter(points);
-
-    ctx.save();
-    ctx.font = "7px sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillStyle = "rgba(255,255,255,0.34)";
-    ctx.fillText(
-      `${side === "left" ? "E" : "D"}${localSlot + 1}`,
-      center.x,
-      center.y
-    );
-    ctx.restore();
-  }
-
-  function drawFallbackFace(points, item, hue) {
-    const center = quadCenter(points);
-    const leftHeight = distance(points[0], points[3]);
-    const rightHeight = distance(points[1], points[2]);
-    const fontSize = Math.max(
-      6,
-      Math.min(18, Math.min(leftHeight, rightHeight) * 0.38)
-    );
-
-    pathQuad(points);
-    ctx.fillStyle = `hsl(${hue},52%,28%)`;
-    ctx.fill();
-
-    ctx.save();
-    ctx.font = `700 ${fontSize}px sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillStyle = "rgba(255,255,255,0.92)";
-    ctx.fillText(initialsFor(item), center.x, center.y);
-    ctx.restore();
-  }
-
-  // COVER + perspectiva aproximada por tiras verticais.
-  // A foto é primeiro recortada como "cover" e depois projetada sobre o quad.
-  function drawImageCoverPerspective(img, points, alpha) {
-    const iw = img.naturalWidth || img.width;
-    const ih = img.naturalHeight || img.height;
-    if (!iw || !ih) return false;
-
-    const topLeft = points[3];
-    const topRight = points[2];
-    const bottomRight = points[1];
-    const bottomLeft = points[0];
-
-    const avgWidth =
-      (distance(topLeft, topRight) + distance(bottomLeft, bottomRight)) * 0.5;
-
-    const avgHeight =
-      (distance(topLeft, bottomLeft) + distance(topRight, bottomRight)) * 0.5;
-
-    if (avgWidth < 1 || avgHeight < 1) return false;
-
-    const destAspect = avgWidth / avgHeight;
-    const srcAspect = iw / ih;
-
-    let sx = 0;
-    let sy = 0;
-    let sw = iw;
-    let sh = ih;
-
-    // CSS background-size: cover equivalente.
-    if (srcAspect > destAspect) {
-      sw = ih * destAspect;
-      sx = (iw - sw) * 0.5;
-    } else {
-      sh = iw / destAspect;
-      sy = (ih - sh) * 0.5;
-    }
-
-    const strips = 28;
-
-    ctx.save();
-    pathQuad(points);
-    ctx.clip();
-    ctx.globalAlpha = alpha;
-
-    for (let i = 0; i < strips; i += 1) {
-      const u0 = i / strips;
-      const u1 = (i + 1) / strips;
-
-      const tl = lerpPoint(topLeft, topRight, u0);
-      const tr = lerpPoint(topLeft, topRight, u1);
-      const bl = lerpPoint(bottomLeft, bottomRight, u0);
-      const br = lerpPoint(bottomLeft, bottomRight, u1);
-
-      const sourceX0 = sx + sw * u0;
-      const sourceX1 = sx + sw * u1;
-      const sourceW = Math.max(0.5, sourceX1 - sourceX0);
-
-      // A tira estreita é tratada como um paralelogramo.
-      // Com 28 tiras, a diferença para o quad projetivo fica visualmente suave.
-      const a = (tr.x - tl.x) / sourceW;
-      const b = (tr.y - tl.y) / sourceW;
-      const c = (bl.x - tl.x) / sh;
-      const d = (bl.y - tl.y) / sh;
-
-      ctx.save();
-      ctx.setTransform(a, b, c, d, tl.x, tl.y);
-
-      // Pequena sobreposição evita micro-fendas entre tiras.
-      ctx.drawImage(
-        img,
-        sourceX0,
-        sy,
-        sourceW + 0.7,
-        sh,
-        0,
-        0,
-        sourceW + 0.7,
-        sh
-      );
-
-      ctx.restore();
-    }
-
-    ctx.restore();
-    return true;
-  }
-
-  function drawOccupiedBlock(points, item, slot, flash) {
-    const hue =
-      (
-        tunnelHue +
-        slot * 19 +
-        time * (2.0 + energy * 1.5) +
-        bass * 34
-      ) % 360;
-
-    // Base do bloco sempre opaca.
-    pathQuad(points);
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = `hsl(${hue},68%,${19 + energy * 12}%)`;
-    ctx.fill();
-
-    const entry = item.profile ? tunnelImageEntry(item.profile) : null;
-    let drewPhoto = false;
-
-    if (entry) {
-      drewPhoto = drawImageCoverPerspective(
-        entry.img,
-        points,
-        0.86
-      );
-    }
-
-    if (!drewPhoto) {
-      drawFallbackFace(points, item, hue);
-    }
-
-    // Tinta leve por cima mantém integração com a música,
-    // sem reduzir a opacidade da parede.
-    ctx.save();
-    pathQuad(points);
-    ctx.clip();
-    ctx.globalAlpha = 1;
-    ctx.fillStyle =
-      `hsla(${hue},92%,50%,${0.10 + energy * 0.06})`;
-    ctx.fillRect(0, 0, w, h);
-    ctx.restore();
-
-    // Moldura compartilhada entre os blocos.
-    pathQuad(points);
-    ctx.strokeStyle =
-      `hsla(${(hue + 35) % 360},100%,78%,${0.48 + energy * 0.19 + flash * 0.20})`;
-    ctx.lineWidth = 0.9 + energy * 0.8 + flash * 1.1;
-    ctx.stroke();
-
-    if (item.count > 1) {
-      const center = quadCenter(points);
-
-      ctx.save();
-      ctx.font = "6px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "bottom";
-      ctx.fillStyle = "rgba(255,255,255,0.88)";
-      ctx.fillText(`×${item.count}`, center.x, points[1].y - 2);
-      ctx.restore();
-    }
-
-    if (flash > 0) {
-      ctx.save();
-      ctx.globalCompositeOperation = "lighter";
-      pathQuad(points);
-      ctx.strokeStyle = `rgba(255,255,255,${flash * 0.40})`;
-      ctx.lineWidth = 1.1 + flash * 1.6;
-      ctx.stroke();
-      ctx.restore();
-    }
-  }
-
-  for (let slot = 0; slot < GIFT_WALL_CAPACITY; slot += 1) {
-    const level = Math.floor(slot / GIFT_WALL_SLOTS_PER_LEVEL);
-    const withinLevel = slot % GIFT_WALL_SLOTS_PER_LEVEL;
-    const side = withinLevel < 8 ? "left" : "right";
-    const localSlot = withinLevel < 8 ? withinLevel : withinLevel - 8;
-
-    const item = giftsBySlot.get(slot) || null;
-    let points = wallQuad(side, localSlot, level);
-
-    if (!item) {
-      if (previewGuides) {
-        drawPreviewGuide(points, side, localSlot, level);
-      }
-      continue;
-    }
-
-    const age =
-      item.createdAt > 0
-        ? Math.max(0, epochNow - item.createdAt)
-        : 999;
-
-    const appear = Math.max(0.10, Math.min(1, age / 0.55));
-    const eased = 1 - Math.pow(1 - appear, 3);
-    points = scaledQuad(points, 0.92 + eased * 0.08);
-
-    const flash = age < 1.0 ? 1 - age / 1.0 : 0;
-
-    drawOccupiedBlock(points, item, slot, flash);
-  }
-
-  ctx.restore();
-}
-
-
-function drawOrbitalCathedral(timeMs = performance.now()) {
-  if (!tunnelCtx || !tunnelCanvas) return;
-
-  const ctx = tunnelCtx;
-  const w = TUNNEL_W;
-  const h = TUNNEL_H;
-  const time = Number(timeMs || 0) * 0.001;
-  const energy = Math.max(0, Math.min(1, Number(musicEnergy || 0)));
-  const bass = Math.max(0, Math.min(1, Number(musicBass || 0)));
-
-  // O ponto de fuga do túnel coincide com o fim/horizonte do piso.
-  const floorHorizonY = h * 0.675;
-  const cx = w * 0.5;
-  const cy = floorHorizonY;
-
-  ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-
-  // ============================================================
-  // 1. FUNDO PLASMA ANIMADO, PUXADO PARA O PRETO.
-  // ============================================================
-  ctx.globalCompositeOperation = "source-over";
-  ctx.fillStyle = "#010105";
-  ctx.fillRect(0, 0, w, h);
-
-  const plasmaSpots = [
-    { ax: 0.23, ay: 0.18, rx: 0.34, ry: 0.26, phase: 0.0, hue: 286 },
-    { ax: 0.78, ay: 0.24, rx: 0.30, ry: 0.23, phase: 1.7, hue: 188 },
-    { ax: 0.18, ay: 0.52, rx: 0.38, ry: 0.30, phase: 3.1, hue: 330 },
-    { ax: 0.80, ay: 0.56, rx: 0.35, ry: 0.28, phase: 4.4, hue: 155 },
-    { ax: 0.50, ay: 0.40, rx: 0.42, ry: 0.34, phase: 5.6, hue: 225 },
-  ];
-
-  ctx.globalCompositeOperation = "lighter";
-  for (let i = 0; i < plasmaSpots.length; i += 1) {
-    const spot = plasmaSpots[i];
-    const slow = time * (0.055 + i * 0.006);
-    const px = w * (
-      spot.ax +
-      Math.sin(slow + spot.phase) * (0.07 + energy * 0.025)
-    );
-    const py = h * (
-      spot.ay +
-      Math.cos(slow * 0.83 + spot.phase) * (0.055 + bass * 0.020)
-    );
-    const radius = Math.max(w * spot.rx, h * spot.ry);
-    const hue = (
-      spot.hue +
-      tunnelHue * 0.16 +
-      Math.sin(time * 0.10 + spot.phase) * 28
-    ) % 360;
-
-    const plasma = ctx.createRadialGradient(px, py, 0, px, py, radius);
-    plasma.addColorStop(
-      0,
-      `hsla(${hue},100%,58%,${0.10 + energy * 0.10})`
-    );
-    plasma.addColorStop(
-      0.28,
-      `hsla(${hue + 28},100%,44%,${0.075 + energy * 0.075})`
-    );
-    plasma.addColorStop(
-      0.62,
-      `hsla(${hue + 62},92%,28%,${0.026 + energy * 0.040})`
-    );
-    plasma.addColorStop(1, "rgba(0,0,0,0)");
-
-    ctx.fillStyle = plasma;
-    ctx.fillRect(0, 0, w, h);
-  }
-
-  // Faixas orgânicas suaves para dar aparência de plasma esticado.
-  for (let band = 0; band < 7; band += 1) {
-    const phase = time * (0.035 + band * 0.002) + band * 0.93;
-    const x = cx + Math.sin(phase) * w * (0.20 + band * 0.016);
-    const y = h * (0.12 + band * 0.085) + Math.cos(phase * 0.78) * 22;
-    const rx = w * (0.28 + band * 0.015);
-    const ry = 34 + band * 7 + energy * 18;
-    const hue = (190 + band * 31 + tunnelHue * 0.10) % 360;
-
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(Math.sin(phase * 0.43) * 0.28);
-    const streak = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
-    streak.addColorStop(
-      0,
-      `hsla(${hue},100%,62%,${0.030 + energy * 0.042})`
-    );
-    streak.addColorStop(0.46, `hsla(${hue + 34},100%,42%,0.018)`);
-    streak.addColorStop(1, "rgba(0,0,0,0)");
-    ctx.scale(1, ry / rx);
-    ctx.fillStyle = streak;
-    ctx.beginPath();
-    ctx.arc(0, 0, rx, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  // Preto nas bordas: o plasma sempre "morre" no escuro.
-  ctx.globalCompositeOperation = "source-over";
-  const plasmaVignette = ctx.createRadialGradient(
-    cx, h * 0.42, h * 0.12,
-    cx, h * 0.42, h * 0.76
-  );
-  plasmaVignette.addColorStop(0, "rgba(0,0,0,0)");
-  plasmaVignette.addColorStop(0.55, "rgba(0,0,0,.04)");
-  plasmaVignette.addColorStop(0.82, "rgba(0,0,0,.30)");
-  plasmaVignette.addColorStop(1, "rgba(0,0,0,.72)");
-  ctx.fillStyle = plasmaVignette;
-  ctx.fillRect(0, 0, w, h);
-
-  // ============================================================
-  // 2. TÚNEL / ANÉIS: CENTRO NO FIM DO PISO.
-  // ============================================================
-  ctx.globalCompositeOperation = "lighter";
-
-  const ringCount = 13;
-  const ringSegments = 28;
-  const ringFlow = time * (15 + energy * 22);
-  const ringDrift = time * (0.009 + energy * 0.007);
-  const pulse =
-    1 +
-    Math.sin(time * (0.82 + bass * 1.05)) *
-      (0.014 + bass * 0.050);
-
-  for (let ring = 0; ring < ringCount; ring += 1) {
-    const depth = (ring / ringCount + ringDrift) % 1;
-    const radius = (13 + depth * h * 0.60) * pulse;
-    const ry = radius * (0.72 + depth * 0.23);
-    const alpha =
-      0.18 + (1 - depth) * (0.34 + energy * 0.25);
-    const width =
-      2.4 +
-      energy * 3.8 +
-      bass * 2.0 +
-      (1 - depth) * 1.9;
-
-    for (let seg = 0; seg < ringSegments; seg += 1) {
-      const a0 = (seg / ringSegments) * Math.PI * 2;
-      const a1 = ((seg + 0.91) / ringSegments) * Math.PI * 2;
-      const hue = (
-        ringFlow * 36 +
-        seg * (360 / ringSegments) +
-        ring * 20 +
-        tunnelHue * 0.16
-      ) % 360;
-
-      ctx.strokeStyle = `hsla(${hue},100%,67%,${alpha})`;
-      ctx.lineWidth = width;
-      ctx.lineCap = "round";
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, radius, ry, 0, a0, a1);
-      ctx.stroke();
-
-      ctx.strokeStyle =
-        `rgba(255,255,255,${alpha * (0.14 + energy * 0.19)})`;
-      ctx.lineWidth = Math.max(0.9, width * 0.17);
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, radius, ry, 0, a0, a1);
-      ctx.stroke();
-    }
-  }
-
-  // Halo do ponto de fuga.
-  const vanishingHalo = ctx.createRadialGradient(
-    cx, cy, 0,
-    cx, cy, 62 + bass * 20
-  );
-  vanishingHalo.addColorStop(
-    0,
-    `rgba(255,255,255,${0.13 + bass * 0.12})`
-  );
-  vanishingHalo.addColorStop(
-    0.22,
-    `hsla(${195 + tunnelHue * 0.08},100%,64%,${0.16 + energy * 0.12})`
-  );
-  vanishingHalo.addColorStop(1, "rgba(0,0,0,0)");
-  ctx.fillStyle = vanishingHalo;
-  ctx.beginPath();
-  ctx.arc(cx, cy, 76 + bass * 18, 0, Math.PI * 2);
-  ctx.fill();
-
-  // ============================================================
-  // 3. TRILHOS / FOTOS: DESENHADOS ANTES DO PISO.
-  //    A PARTE BAIXA SERÁ COBERTA PELOS TIJOLOS.
-  // ============================================================
-    // Trilhos e fotos existem somente ACIMA do horizonte do piso.
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(0, 0, w, floorHorizonY - 2);
-  ctx.clip();
-
-const laneCount = 24;
-  const laneRotation = time * (0.055 + energy * 0.032);
-  const outerRx = w * 0.84;
-  const outerRy = h * 0.78;
-  const innerRadius = 13 + bass * 6;
-  const laneGeometry = [];
-
-  for (let i = 0; i < laneCount; i += 1) {
-    const baseAngle =
-      (i / laneCount) * Math.PI * 2 + laneRotation;
-
-    const outerX = cx + Math.cos(baseAngle) * outerRx;
-    const outerY = cy + Math.sin(baseAngle) * outerRy;
-
-    const innerAngle =
-      baseAngle +
-      0.31 +
-      Math.sin(time * 0.44 + i) * 0.035;
-
-    const innerX = cx + Math.cos(innerAngle) * innerRadius;
-    const innerY = cy + Math.sin(innerAngle) * innerRadius * 0.72;
-
-    const ctrlAngle = baseAngle + 0.15;
-    const ctrlX =
-      cx + Math.cos(ctrlAngle) * outerRx * 0.46;
-    const ctrlY =
-      cy + Math.sin(ctrlAngle) * outerRy * 0.39;
-
-    laneGeometry.push({
-      outerX, outerY, ctrlX, ctrlY, innerX, innerY,
-    });
-
-    const hue = (ringFlow * 42 + i * 17 + 120) % 360;
-
-    ctx.strokeStyle =
-      `hsla(${hue},100%,58%,${0.075 + energy * 0.14})`;
-    ctx.lineWidth = 5.0 + energy * 3.4;
-    ctx.beginPath();
-    ctx.moveTo(outerX, outerY);
-    ctx.quadraticCurveTo(ctrlX, ctrlY, innerX, innerY);
-    ctx.stroke();
-
-    ctx.strokeStyle =
-      `hsla(${hue + 22},100%,76%,${0.18 + energy * 0.25})`;
-    ctx.lineWidth = 2.0 + energy * 2.2;
-    ctx.beginPath();
-    ctx.moveTo(outerX, outerY);
-    ctx.quadraticCurveTo(ctrlX, ctrlY, innerX, innerY);
-    ctx.stroke();
-
-    const travel =
-      (time * (0.085 + energy * 0.060) + i * 0.061) % 1;
-    const eased = travel * travel;
-    const omt = 1 - eased;
-
-    const sparkX =
-      omt * omt * outerX +
-      2 * omt * eased * ctrlX +
-      eased * eased * innerX;
-
-    const sparkY =
-      omt * omt * outerY +
-      2 * omt * eased * ctrlY +
-      eased * eased * innerY;
-
-    ctx.fillStyle =
-      `hsla(${hue + 34},100%,80%,${0.32 + energy * 0.32})`;
-    ctx.beginPath();
-    ctx.arc(sparkX, sparkY, 2.2 + bass * 2.4, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  const people = Array.isArray(tunnelPeople) ? tunnelPeople : [];
-  const peopleCount = Math.min(10, people.length);
-
-  for (let i = 0; i < peopleCount; i += 1) {
-    const person = people[i];
-    const lane = laneGeometry[(i * 3 + 1) % laneGeometry.length];
-
-    const travel =
-      (time * (0.035 + (i % 3) * 0.005) +
-        i / Math.max(1, peopleCount)) % 1;
-
-    const eased = travel * travel;
-    const omt = 1 - eased;
-
-    const px =
-      omt * omt * lane.outerX +
-      2 * omt * eased * lane.ctrlX +
-      eased * eased * lane.innerX;
-
-    const py =
-      omt * omt * lane.outerY +
-      2 * omt * eased * lane.ctrlY +
-      eased * eased * lane.innerY;
-
-    const perspective = 1 - travel;
-    const radius =
-      6.2 +
-      perspective * 10.2 +
-      (person?.weight > 1 ? 2.2 : 0);
-
-    const alpha = Math.max(
-      0.20,
-      Math.min(0.90, 0.27 + perspective * 0.59)
-    );
-
-    const hue =
-      (ringFlow * 46 + i * 49 + 155) % 360;
-
-    if (!drawTunnelProfile(
-      ctx, person, px, py, radius, hue, alpha
-    )) {
-      ctx.fillStyle = `hsla(${hue},100%,77%,${alpha})`;
-      ctx.beginPath();
-      ctx.arc(px, py, Math.max(2, radius * 0.34), 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  // ============================================================
-  // 4. PISO OPACO POR CIMA DOS TRILHOS.
-  //    O HORIZONTE COINCIDE COM O CENTRO DA ESPIRAL.
-  // ============================================================
-    ctx.restore();
-
-ctx.globalCompositeOperation = "source-over";
-
-  const floorBottom = h * 1.035;
-  const rows = 11;
-  const cols = 7;
-  const beatStep = Math.floor(time * (0.45 + bass * 1.35));
-
-  function drawTileMotif(
-    cxTile, cyTile, tileW, tileH, seed, hueBase, alphaBase
-  ) {
-    const mode = seed % 8;
-    const size = Math.max(
-      3.5,
-      Math.min(tileW, tileH) * 0.20
-    );
-    const hue2 = (hueBase + 115) % 360;
-
-    ctx.save();
-    ctx.globalAlpha = alphaBase;
-    ctx.lineWidth = Math.max(0.7, size * 0.12);
-    ctx.strokeStyle = `hsla(${hue2},100%,86%,.95)`;
-    ctx.fillStyle = `hsla(${hue2},100%,86%,.90)`;
-
-    if (mode === 0) {
-      ctx.beginPath();
-      ctx.arc(cxTile, cyTile, size, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(cxTile, cyTile, size * 0.40, 0, Math.PI * 2);
-      ctx.stroke();
-    } else if (mode === 1) {
-      ctx.beginPath();
-      ctx.moveTo(cxTile, cyTile - size);
-      ctx.lineTo(cxTile + size * 0.92, cyTile + size * 0.82);
-      ctx.lineTo(cxTile - size * 0.92, cyTile + size * 0.82);
-      ctx.closePath();
-      ctx.stroke();
-    } else if (mode === 2) {
-      ctx.beginPath();
-      ctx.moveTo(cxTile, cyTile - size);
-      ctx.lineTo(cxTile + size, cyTile);
-      ctx.lineTo(cxTile, cyTile + size);
-      ctx.lineTo(cxTile - size, cyTile);
-      ctx.closePath();
-      ctx.stroke();
-    } else if (mode === 3) {
-      ctx.strokeRect(
-        cxTile - size * 0.84,
-        cyTile - size * 0.84,
-        size * 1.68,
-        size * 1.68
-      );
-    } else if (mode === 4) {
-      ctx.font = `${Math.max(9, size * 1.55)}px sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      const glyphs = ["✨", "🔥", "💎", "😀"];
-      ctx.fillText(
-        glyphs[Math.abs(seed) % glyphs.length],
-        cxTile,
-        cyTile
-      );
-    } else if (mode === 5) {
-      ctx.beginPath();
-      ctx.arc(
-        cxTile - size * 0.45, cyTile, size * 0.36,
-        0, Math.PI * 2
-      );
-      ctx.arc(
-        cxTile + size * 0.45, cyTile, size * 0.36,
-        0, Math.PI * 2
-      );
-      ctx.fill();
-    } else if (mode === 6) {
-      ctx.beginPath();
-      for (let p = 0; p < 5; p += 1) {
-        const a = -Math.PI / 2 + p * Math.PI * 2 / 5;
-        const sx = cxTile + Math.cos(a) * size;
-        const sy = cyTile + Math.sin(a) * size;
-        if (p === 0) ctx.moveTo(sx, sy);
-        else ctx.lineTo(sx, sy);
-      }
-      ctx.closePath();
-      ctx.stroke();
-    } else {
-      ctx.beginPath();
-      ctx.moveTo(cxTile - size, cyTile);
-      ctx.lineTo(cxTile, cyTile - size);
-      ctx.lineTo(cxTile + size, cyTile);
-      ctx.lineTo(cxTile, cyTile + size);
-      ctx.closePath();
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.arc(cxTile, cyTile, size * 0.17, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    ctx.restore();
-  }
-
-  // Camada-base escura do piso garante que os trilhos não atravessem visualmente.
-  const floorBase = ctx.createLinearGradient(
-    0, floorHorizonY, 0, h
-  );
-  floorBase.addColorStop(0, "#03060e");
-  floorBase.addColorStop(0.18, "#02040a");
-  floorBase.addColorStop(1, "#000003");
-  ctx.fillStyle = floorBase;
-
-  ctx.beginPath();
-  ctx.moveTo(cx - 24, floorHorizonY);
-  ctx.lineTo(cx + 24, floorHorizonY);
-  ctx.lineTo(w * 1.08, floorBottom);
-  ctx.lineTo(w * -0.08, floorBottom);
-  ctx.closePath();
-  ctx.fill();
-
-  for (let row = 0; row < rows; row += 1) {
-    const p0 = row / rows;
-    const p1 = (row + 1) / rows;
-
-    const y0 =
-      floorHorizonY +
-      Math.pow(p0, 1.78) * (floorBottom - floorHorizonY);
-
-    const y1 =
-      floorHorizonY +
-      Math.pow(p1, 1.78) * (floorBottom - floorHorizonY);
-
-    const half0 = 24 + Math.pow(p0, 1.16) * w * 0.60;
-    const half1 = 24 + Math.pow(p1, 1.16) * w * 0.60;
-
-    for (let col = 0; col < cols; col += 1) {
-      const u0 = col / cols;
-      const u1 = (col + 1) / cols;
-
-      const x00 = cx - half0 + half0 * 2 * u0;
-      const x01 = cx - half0 + half0 * 2 * u1;
-      const x10 = cx - half1 + half1 * 2 * u0;
-      const x11 = cx - half1 + half1 * 2 * u1;
-
-      const seed = row * 47 + col * 83 + beatStep * 29;
-      const hue =
-        (seed * 17 + tunnelHue + bass * 64) % 360;
-
-      const light =
-        27 +
-        energy * 24 +
-        ((row + col + beatStep) % 3) * 4;
-
-      // Mais opaco para realmente ficar por cima dos trilhos.
-      const alpha =
-        0.68 + energy * 0.18 + p1 * 0.08;
-
-      ctx.fillStyle =
-        `hsla(${hue},88%,${light}%,${Math.min(.96, alpha)})`;
-
-      ctx.beginPath();
-      ctx.moveTo(x00 + 0.65, y0 + 0.6);
-      ctx.lineTo(x01 - 0.65, y0 + 0.6);
-      ctx.lineTo(x11 - 1.0, y1 - 0.65);
-      ctx.lineTo(x10 + 1.0, y1 - 0.65);
-      ctx.closePath();
-      ctx.fill();
-
-      ctx.strokeStyle =
-        `rgba(255,255,255,${0.055 + energy * 0.075})`;
-      ctx.lineWidth = 0.55;
-      ctx.stroke();
-
-      const cxTile = (x00 + x01 + x10 + x11) * 0.25;
-      const cyTile = (y0 + y0 + y1 + y1) * 0.25;
-      const tileW =
-        Math.abs((x01 - x00) + (x11 - x10)) * 0.5;
-      const tileH = Math.abs(y1 - y0);
-
-      drawTileMotif(
-        cxTile, cyTile, tileW, tileH,
-        seed, hue, 0.36 + energy * 0.22
-      );
-    }
-  }
-
-  // Reflexo leve do plasma no piso.
-  const reflection = ctx.createLinearGradient(
-    0, floorHorizonY, 0, h
-  );
-  reflection.addColorStop(
-    0,
-    `hsla(${195 + tunnelHue * 0.08},100%,58%,${0.10 + energy * 0.05})`
-  );
-  reflection.addColorStop(0.20, "rgba(0,0,0,0)");
-  reflection.addColorStop(0.72, "rgba(0,0,0,0)");
-  reflection.addColorStop(1, "rgba(0,0,0,.20)");
-  ctx.fillStyle = reflection;
-  ctx.fillRect(0, floorHorizonY, w, h - floorHorizonY);
-
-  // Vinheta final.
-  const finalVignette = ctx.createRadialGradient(
-    cx, h * 0.45, h * 0.10,
-    cx, h * 0.45, h * 0.76
-  );
-  finalVignette.addColorStop(0, "rgba(0,0,0,0)");
-  finalVignette.addColorStop(0.58, "rgba(0,0,0,.02)");
-  finalVignette.addColorStop(0.86, "rgba(0,0,0,.12)");
-  finalVignette.addColorStop(1, "rgba(0,0,0,.38)");
-  ctx.fillStyle = finalVignette;
-  ctx.fillRect(0, 0, w, h);
-
-  ctx.restore();
-}
 
 
 function drawTunnel(now) {
+  lastTunnelDrawAt = performance.now();
   if (!tunnelCtx) return;
+
+  updateMusicVolume();
+
+  if (!isTunnelMode()) {
+    clearTunnelFloorOverlay();
+    requestAnimationFrame(
+      drawTunnel
+    );
+    return;
+  }
 
   const time = now * 0.001;
 
-  updateMusicVolume();
   updateMusicEnergy(time);
-  tunnelHue = (tunnelHue + 0.18 + musicEnergy * 1.6) % 360;
 
-  if (!isTunnelMode()) {
-    requestAnimationFrame(drawTunnel);
-    return;
+  tunnelHue =
+    (
+      tunnelHue
+      + 0.18
+      + musicEnergy * 1.6
+    ) % 360;
+
+  const registry =
+    window.BonecoLayoutRegistry;
+
+  let rendered = false;
+
+  try {
+    rendered =
+      registry?.render(
+        now,
+        {
+          musicEnergy,
+          musicBass,
+          tunnelHue,
+          tunnelPeople,
+          visualMode,
+          activeLayout,
+        }
+      ) === true;
+  } catch (err) {
+    console.warn(
+      "layout render failed",
+      activeLayout,
+      err
+    );
   }
 
-  if (tunnelStyle === "orbital_cathedral") {
-    drawOrbitalCathedral(now);
-    drawOrbitalFloorOverlay(now);
-    drawGiftWallOverlay(now);
-    requestAnimationFrame(drawTunnel);
-    return;
+  if (!rendered) {
+    clearTunnelFloorOverlay();
+
+    tunnelCtx.setTransform(
+      1,
+      0,
+      0,
+      1,
+      0,
+      0
+    );
+
+    tunnelCtx.globalCompositeOperation =
+      "source-over";
+
+    tunnelCtx.fillStyle =
+      "#02030a";
+
+    tunnelCtx.fillRect(
+      0,
+      0,
+      TUNNEL_W,
+      TUNNEL_H
+    );
   }
 
-  clearTunnelFloorOverlay();
-  clearTunnelWallOverlay();
-  const ctx = tunnelCtx;
-
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = "#02030a";
-  ctx.fillRect(0, 0, TUNNEL_W, TUNNEL_H);
-
-  const center = {
-    x: TUNNEL_W * 0.5 + Math.sin(time * 0.7) * (5 + musicBass * 10),
-    y: TUNNEL_H * 0.31 + Math.cos(time * 0.52) * (4 + musicEnergy * 7),
-  };
-  const pulse = Math.max(0.12, Math.min(1, musicBass * 1.4 + musicEnergy * 0.55));
-  const wallOrbit = time * 0.046;
-  const batons = [
-    { outer: { x: -14, y: -14 }, hue: (tunnelHue + 312) % 360, phase: 0 },
-    { outer: { x: TUNNEL_W + 14, y: -14 }, hue: (tunnelHue + 28) % 360, phase: 0.18 },
-    { outer: { x: TUNNEL_W + 14, y: TUNNEL_H + 14 }, hue: (tunnelHue + 90) % 360, phase: 0.36 },
-    { outer: { x: -14, y: TUNNEL_H + 14 }, hue: (tunnelHue + 276) % 360, phase: 0.54 },
-  ];
-  const cornerAnchors = [
-    batons[0].outer,
-    batons[1].outer,
-    batons[2].outer,
-    batons[3].outer,
-  ];
-
-  const bg = ctx.createRadialGradient(center.x, center.y, 8, center.x, center.y, 430);
-  bg.addColorStop(0, `hsla(${(tunnelHue + 85) % 360}, 100%, 58%, .35)`);
-  bg.addColorStop(0.28, `hsla(${(tunnelHue + 170) % 360}, 96%, 40%, .1)`);
-  bg.addColorStop(0.7, "rgba(3, 8, 18, .9)");
-  bg.addColorStop(1, "#010106");
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, TUNNEL_W, TUNNEL_H);
-
-  ctx.globalCompositeOperation = "lighter";
-  for (const baton of batons) {
-    drawCornerSaber(ctx, baton.outer, center, baton.hue, pulse, time, baton.phase);
-  }
-  drawTunnelDepthLines(ctx, center, tunnelHue, pulse, time, wallOrbit);
-  for (let i = 0; i < 40; i += 1) {
-    const p = (i / 40 + time * (0.075 + musicEnergy * 0.14)) % 1;
-    const scale = 0.12 + p * p * 1.08;
-    const alpha = (1 - p) * 0.54 + 0.075;
-    const hue = (tunnelHue + i * 10 + musicBass * 150) % 360;
-    drawTunnelRing(ctx, cornerAnchors, center, scale, hue, alpha, 1.8 + pulse * 4.2 + p * 3.2, time, i);
-  }
-
-  ctx.globalCompositeOperation = "source-over";
-  const floor = ctx.createLinearGradient(0, TUNNEL_H * 0.66, 0, TUNNEL_H);
-  floor.addColorStop(0, "rgba(2, 5, 11, 0)");
-  floor.addColorStop(0.4, `hsla(${(tunnelHue + 34) % 360}, 80%, 18%, .26)`);
-  floor.addColorStop(1, "#010102");
-  ctx.fillStyle = floor;
-  ctx.fillRect(0, TUNNEL_H * 0.62, TUNNEL_W, TUNNEL_H * 0.38);
-
-  requestAnimationFrame(drawTunnel);
-}
-
-function modulo(value, size) {
-  const result = value % size;
-  return result < 0 ? result + size : result;
-}
-
-function worldSize(map = currentMap) {
-  const worldCfg = map?.world || { width: 1280, height: 720 };
-  return {
-    width: Number(worldCfg.width || 1280),
-    height: Number(worldCfg.height || 720),
-  };
-}
-
-function baseViewport(map = currentMap) {
-  const worldCfg = map?.world || { width: 1280, height: 720 };
-  const vp = map?.viewport || {};
-  const defaultW = Number(worldCfg.height || 720) * STAGE_WIDTH / STAGE_HEIGHT;
-  return {
-    x: Number(vp.x ?? Math.max(0, (Number(worldCfg.width || 1280) - defaultW) * 0.5)),
-    y: Number(vp.y ?? 0),
-    w: Number(vp.w || defaultW),
-    h: Number(vp.h || worldCfg.height || 720),
-  };
-}
-
-function movementConfig(map = currentMap) {
-  const movement = map?.movement || {};
-  const durationMin = Math.max(1, Math.min(30, Number(movement.wide_shot_duration_min ?? 5)));
-  const durationMax = Math.max(durationMin, Math.min(45, Number(movement.wide_shot_duration_max ?? 9)));
-  const intervalMin = Math.max(1, Math.min(60, Number(movement.wide_shot_interval_min ?? 7)));
-  const intervalMax = Math.max(intervalMin, Math.min(90, Number(movement.wide_shot_interval_max ?? 15)));
-  return {
-    cameraSpeed: Math.max(0.2, Math.min(4, Number(movement.camera_speed ?? DEFAULT_CAMERA_SPEED))),
-    mainCameraScale: Math.max(1, Math.min(1.8, Number(movement.main_camera_scale ?? 1.18))),
-    mainCameraXOffset: Math.max(-220, Math.min(220, Number(movement.main_camera_x_offset ?? 0))),
-    mainCameraYOffset: Math.max(-240, Math.min(240, Number(movement.main_camera_y_offset ?? 0))),
-    stopFollowSeconds: Math.max(0, Math.min(4, Number(movement.stop_follow_seconds ?? 1.0))),
-    runDirection: DEFAULT_RUN_DIRECTION,
-    wideShotEnabled: Boolean(movement.wide_shot_enabled ?? true),
-    wideShotChance: Math.max(0, Math.min(1, Number(movement.wide_shot_chance ?? 0.22))),
-    wideShotViewportScale: Math.max(1, Math.min(1.75, Number(movement.wide_shot_viewport_scale ?? 1.28))),
-    wideShotYOffset: Math.max(-240, Math.min(240, Number(movement.wide_shot_y_offset ?? 0))),
-    runStartShotScaleMin: Math.max(1, Math.min(2.6, Number(movement.run_start_shot_scale_min ?? 1.25))),
-    runStartShotScaleMax: Math.max(1, Math.min(2.6, Number(movement.run_start_shot_scale_max ?? 2.15))),
-    runStopShotScaleMin: Math.max(1, Math.min(2.6, Number(movement.run_stop_shot_scale_min ?? 1.2))),
-    runStopShotScaleMax: Math.max(1, Math.min(2.6, Number(movement.run_stop_shot_scale_max ?? 2.05))),
-    runStopShotXOffset: Math.max(0, Math.min(180, Number(movement.run_stop_shot_x_offset ?? 52))),
-    wideShotDurationMin: durationMin,
-    wideShotDurationMax: durationMax,
-    wideShotIntervalMin: intervalMin,
-    wideShotIntervalMax: intervalMax,
-  };
-}
-
-function cameraSpeedMultiplier() {
-  return movementConfig(currentMap).cameraSpeed;
-}
-
-function normalCameraScale(map = currentMap) {
-  return movementConfig(map).mainCameraScale;
+  requestAnimationFrame(
+    drawTunnel
+  );
 }
 
 function randomBetween(min, max) {
   return Number(min) + Math.random() * Math.max(0, Number(max) - Number(min));
 }
 
-function randomDistinctBetween(min, max, lastValue = 0, minDelta = 0.06) {
-  const low = Math.min(Number(min), Number(max));
-  const high = Math.max(Number(min), Number(max));
-  if (high - low <= minDelta) return low;
-  let candidate = randomBetween(low, high);
-  for (let attempt = 0; attempt < 8 && Math.abs(candidate - Number(lastValue || 0)) < minDelta; attempt += 1) {
-    candidate = randomBetween(low, high);
-  }
-  if (Math.abs(candidate - Number(lastValue || 0)) < minDelta) {
-    candidate = candidate + minDelta <= high ? candidate + minDelta : candidate - minDelta;
-  }
-  return Math.max(low, Math.min(high, candidate));
-}
-
-function scheduleWideShotDecision(now) {
-  const cfg = movementConfig(currentMap);
-  sceneCamera.nextDecisionAt = now + randomBetween(cfg.wideShotIntervalMin, cfg.wideShotIntervalMax) * 1000;
-}
-
-function activateWideShot(now = performance.now(), seconds = 0) {
-  const cfg = movementConfig(currentMap);
-  if (!cfg.wideShotEnabled) return;
-  const duration = seconds > 0 ? Number(seconds) : randomBetween(cfg.wideShotDurationMin, cfg.wideShotDurationMax);
-  sceneCamera.targetViewportScale = Math.max(cfg.mainCameraScale, cfg.wideShotViewportScale);
-  sceneCamera.wideUntil = now + duration * 1000;
-  sceneCamera.nextDecisionAt = 0;
-  sceneCamera.activeShotKind = "wide";
-  stage.dataset.camera = "wide";
-}
-
-function activateMotionCameraShot(kind, now = performance.now(), durationMs = 1200) {
-  const cfg = movementConfig(currentMap);
-  const isStop = kind === "stop";
-  const min = isStop ? cfg.runStopShotScaleMin : cfg.runStartShotScaleMin;
-  const max = isStop ? cfg.runStopShotScaleMax : cfg.runStartShotScaleMax;
-  const lastKey = isStop ? "lastStopScale" : "lastStartScale";
-  const scale = randomDistinctBetween(min, max, sceneCamera[lastKey] || 0);
-  sceneCamera[lastKey] = scale;
-  sceneCamera.targetViewportScale = Math.max(cfg.mainCameraScale, scale);
-  sceneCamera.wideUntil = now + Math.max(350, Number(durationMs || 1200));
-  sceneCamera.nextDecisionAt = 0;
-  sceneCamera.activeShotKind = isStop ? "stop" : "start";
-  stage.dataset.camera = isStop ? "stop-wide" : "start-wide";
-}
-
-function deactivateWideShot(now = performance.now()) {
-  sceneCamera.targetViewportScale = normalCameraScale();
-  sceneCamera.wideUntil = 0;
-  sceneCamera.activeShotKind = "";
-  stage.dataset.camera = "normal";
-  scheduleWideShotDecision(now);
-}
-
-window.BONECO_GAME_CAMERA = {
-  openWide(seconds = 8) {
-    activateWideShot(performance.now(), Number(seconds) || 8);
-  },
-  closeWide() {
-    deactivateWideShot(performance.now());
-  },
-};
-
-function updateSceneCamera(now, dt, allowRandom = true) {
-  const cfg = movementConfig(currentMap);
-  if (!cfg.wideShotEnabled) {
-    sceneCamera.targetViewportScale = cfg.mainCameraScale;
-    sceneCamera.wideUntil = 0;
-  } else if (sceneCamera.wideUntil && now >= sceneCamera.wideUntil) {
-    deactivateWideShot(now);
-  } else if (!sceneCamera.wideUntil && allowRandom) {
-    if (!sceneCamera.nextDecisionAt) {
-      sceneCamera.nextDecisionAt = now + 700;
-    } else if (now >= sceneCamera.nextDecisionAt) {
-      if (Math.random() < cfg.wideShotChance) activateWideShot(now);
-      else scheduleWideShotDecision(now);
-    }
-  }
-
-  const smoothing = 1 - Math.pow(0.001, Math.max(0, dt));
-  sceneCamera.currentViewportScale += (sceneCamera.targetViewportScale - sceneCamera.currentViewportScale) * smoothing;
-  if (Math.abs(sceneCamera.currentViewportScale - sceneCamera.targetViewportScale) < 0.002) {
-    sceneCamera.currentViewportScale = sceneCamera.targetViewportScale;
-  }
-}
-
-function dynamicViewport(map = currentMap) {
-  const vp = baseViewport(map);
-  const world = worldSize(map);
-  const cfg = movementConfig(map);
-  const viewportScale = Math.max(1, Number(sceneCamera.currentViewportScale || 1));
-  const mainScale = Math.max(1, Number(cfg.mainCameraScale || 1));
-  const referenceScale = Math.max(mainScale, cfg.wideShotViewportScale, Number(sceneCamera.targetViewportScale || 1));
-  const mainProgress = mainScale > 1 ? Math.max(0, Math.min(1, (viewportScale - 1) / Math.max(0.001, mainScale - 1))) : 0;
-  const wideProgress = Math.max(0, Math.min(1, (viewportScale - mainScale) / Math.max(0.001, referenceScale - mainScale)));
-  const mainCameraOffset = cfg.mainCameraXOffset * mainProgress;
-  const stopLeftOffset = sceneCamera.activeShotKind === "stop" ? cfg.runStopShotXOffset * wideProgress : 0;
-  const w = vp.w * viewportScale;
-  const h = vp.h * viewportScale;
-  return {
-    ...vp,
-    w,
-    h,
-    x: modulo(walk.actorX - w * 0.5 + mainCameraOffset + stopLeftOffset, world.width),
-    y: vp.y + cfg.mainCameraYOffset + cfg.wideShotYOffset * wideProgress,
-  };
-}
-
-function worldRelativeX(x, viewportX, worldWidth) {
-  let relative = modulo(x, worldWidth) - viewportX;
-  if (relative < -worldWidth * 0.5) relative += worldWidth;
-  if (relative > worldWidth * 0.5) relative -= worldWidth;
-  return relative;
-}
-
-function zFor(item) {
-  const base = {
-    sky: 0,
-    far_bg: 10,
-    back_props: 20,
-    floor: 42,
-    interactive: 55,
-    front_props: 80,
-  }[item.layer] ?? 20;
-  return base * 1000 + Number(item.z || 0);
-}
-
-const SKY_VARIANTS = [
-  "night-blue",
-  "night-blue",
-  "night-violet",
-  "night-green",
-  "night-deep",
-  "night-deep",
-  "sunset-blood",
-  "sunset-ember",
-  "day-cold",
-];
-
-function selectSkyForMap(map) {
-  if (!skyLayer) return;
-  const key = `${map?.avatar || ""}:${map?.map_name || ""}:${map?.updated_at || ""}`;
-  if (key === skyRuntimeKey) return;
-  skyRuntimeKey = key;
-  const variant = SKY_VARIANTS[Math.floor(Math.random() * SKY_VARIANTS.length)] || "night-blue";
-  skyLayer.dataset.sky = variant;
-}
-
-function renderMap(map) {
-  currentMap = map;
-  selectSkyForMap(map);
-  const objects = Array.isArray(map.objects)
-    ? map.objects.filter(item => item && item.visible !== false && item.asset)
-    : [];
-  const signature = JSON.stringify(objects.map(item => [
-    item.id,
-    item.asset,
-    item.layer,
-    item.x,
-    item.y,
-    item.w,
-    item.h,
-    item.z,
-  ]));
-  if (signature === mapSignature) return;
-  mapSignature = signature;
-  mapEntries = [];
-  mapBack.replaceChildren();
-  mapFront.replaceChildren();
-
-  for (const item of objects.sort((a, b) => zFor(a) - zFor(b))) {
-    for (const copy of [-1, 0, 1]) {
-      const isFloor = item.layer === "floor";
-      const node = isFloor ? document.createElement("div") : document.createElement("img");
-      node.className = `mapObject${isFloor ? " mapObjectFloor" : ""}`;
-      const src = assetUrl(item.asset);
-      if (isFloor) {
-        node.style.backgroundImage = `url(${JSON.stringify(src)})`;
-      } else {
-        node.decoding = "async";
-        node.src = src;
-      }
-      node.style.zIndex = String(zFor(item));
-      if (item.layer === "front_props") mapFront.appendChild(node);
-      else mapBack.appendChild(node);
-      mapEntries.push({ node, item, copy });
-    }
-  }
-  positionScene();
-}
-
-function positionScene() {
-  if (!currentMap) return;
-  const world = worldSize(currentMap);
-  const vp = dynamicViewport(currentMap);
-  for (const entry of mapEntries) {
-    const item = entry.item;
-    const x = Number(item.x || 0) + entry.copy * world.width;
-    entry.node.style.left = `${((x - vp.x) / vp.w) * 100}%`;
-    entry.node.style.top = `${((Number(item.y || 0) - vp.y) / vp.h) * 100}%`;
-    entry.node.style.width = `${(Number(item.w || 0) / vp.w) * 100}%`;
-    entry.node.style.height = `${(Number(item.h || 0) / vp.h) * 100}%`;
-  }
-
-  const actorScreenX = (worldRelativeX(walk.actorX, vp.x, world.width) / vp.w) * STAGE_WIDTH;
-  const spawn = currentMap?.spawn_points?.main || {};
-  const spawnY = Number(spawn.y ?? world.height * 0.82);
-  const currentGroundY = ((spawnY - vp.y) / vp.h) * STAGE_HEIGHT;
-  const actorScale = Math.max(0.34, Math.min(1, 1 / Math.max(1, Number(sceneCamera.currentViewportScale || 1))));
-  actorLayer.style.setProperty("--actor-x", `${(actorScreenX - STAGE_WIDTH * 0.5).toFixed(2)}px`);
-  actorLayer.style.setProperty("--actor-y", `${(currentGroundY - STAGE_HEIGHT).toFixed(2)}px`);
-  actorLayer.style.setProperty("--actor-scale", actorScale.toFixed(5));
-}
-
-function resetWalkForMap(map) {
-  const key = `${map?.avatar || ""}:${map?.map_name || ""}:${map?.updated_at || ""}`;
-  if (key === mapRuntimeKey) return;
-  mapRuntimeKey = key;
-  const world = worldSize(map);
-  const spawn = map?.spawn_points?.main || {};
-  walk.actorX = Number(spawn.x ?? world.width * 0.5);
-  walk.targetX = null;
-  walk.direction = movementConfig(map).runDirection;
-  sceneCamera.currentViewportScale = normalCameraScale(map);
-  sceneCamera.targetViewportScale = normalCameraScale(map);
-  sceneCamera.wideUntil = 0;
-  sceneCamera.nextDecisionAt = performance.now() + 700;
-  sceneCamera.lastStartScale = 0;
-  sceneCamera.lastStopScale = 0;
-  sceneCamera.activeShotKind = "";
-  stage.dataset.camera = "normal";
-  walk.phase = "idle";
-  walk.phaseStartedAt = 0;
-  walk.loopStartedAt = 0;
-  walk.phaseUntil = 0;
-  walk.directionCyclesLeft = 0;
-  walk.pauseUntil = performance.now() + 900;
-  walk.lastTs = 0;
-  positionScene();
-}
-
-function chooseWalkDirection() {
-  walk.direction = movementConfig(currentMap).runDirection;
-  walk.directionCyclesLeft = 0;
-  return walk.direction;
-}
-
-function walkLoopMs() {
-  return Math.max(350, safeDurationSeconds(walkMotion.loop_start, walkMotion.loop_end, 2800) * 1000);
-}
-
-function randomWalkDistance(direction, speed) {
-  const loopCycles = 1 + Math.floor(Math.random() * 3);
-  const startSeconds = (walkStartMs() / 1000) * 0.78;
-  const loopSeconds = (walkLoopMs() / 1000) * (loopCycles + Math.random() * 0.45) * cameraSpeedMultiplier();
-  const movingSeconds = startSeconds + loopSeconds;
-  const distance = Math.max(520, Number(speed || walk.speed || 140) * movingSeconds);
-  return direction === "left" ? -distance : distance;
-}
-
-function chooseNextWalkTarget(now) {
-  walk.direction = chooseWalkDirection();
-  walk.speed = 116 + Math.random() * 68;
-  walk.targetX = walk.actorX + randomWalkDistance(walk.direction, walk.speed);
-  walk.phase = "start";
-  walk.phaseStartedAt = now;
-  walk.loopStartedAt = 0;
-  walk.phaseUntil = now + walkStartMs();
-  walk.pauseUntil = 0;
-  activateMotionCameraShot("start", now, walkStartMs() * 1.15);
-}
-
-function walkSceneFor(direction, phase) {
-  const side = direction === "left" ? "left" : "right";
-  if (phase === "start") return `walk_start_${side}`;
-  if (phase === "loop") return `walk_loop_${side}`;
-  if (phase === "stop") return `walk_stop_${side}`;
-  return `walk_${side}`;
-}
-
-function clamp01(value) {
-  return Math.max(0, Math.min(1, Number(value || 0)));
-}
-
-function smoothstep(value) {
-  const t = clamp01(value);
-  return t * t * (3 - 2 * t);
-}
-
-function safeDurationSeconds(start, end, fallbackMs) {
-  const value = Number(end || 0) - Number(start || 0);
-  if (value > 0.05) return value;
-  return Math.max(0.05, Number(fallbackMs || 1000) / 1000);
-}
-
-function walkStartMs() {
-  return Math.max(350, safeDurationSeconds(walkMotion.start, walkMotion.loop_start, WALK_START_MS) * 1000 / WALK_TRANSITION_TIME_SCALE);
-}
-
-function walkStopMs() {
-  return Math.max(350, safeDurationSeconds(walkMotion.loop_end, walkMotion.stop_end, WALK_STOP_MS) * 1000 / WALK_TRANSITION_TIME_SCALE);
-}
-
-function walkSpeedMultiplier(now) {
-  const cameraSpeed = cameraSpeedMultiplier();
-  if (walk.phase === "start") {
-    const elapsed = (now - walk.phaseStartedAt) / 1000;
-    const accelDuration = safeDurationSeconds(walkMotion.start, walkMotion.accel_end, WALK_START_MS) / WALK_TRANSITION_TIME_SCALE;
-    return (0.38 + smoothstep(elapsed / accelDuration) * 0.62) * cameraSpeed;
-  }
-  if (walk.phase === "stop") {
-    const elapsed = (now - walk.phaseStartedAt) / 1000;
-    const stopDuration = safeDurationSeconds(walkMotion.loop_end, walkMotion.stop_end, WALK_STOP_MS) / WALK_TRANSITION_TIME_SCALE;
-    const decelOffset = Math.max(0, Number(walkMotion.decel_start || walkMotion.loop_end) - Number(walkMotion.loop_end || 0)) / WALK_TRANSITION_TIME_SCALE;
-    if (elapsed <= decelOffset) return cameraSpeed;
-    const decelDuration = Math.max(0.08, stopDuration - decelOffset);
-    return (1 - smoothstep((elapsed - decelOffset) / decelDuration) * 0.62) * cameraSpeed;
-  }
-  if (walk.phase === "loop") {
-    return cameraSpeed;
-  }
-  return 1;
-}
-
-function stopFollowMultiplier(now) {
-  const { stopFollowSeconds } = movementConfig(currentMap);
-  if (stopFollowSeconds <= 0 || !walk.phaseStartedAt) return 0;
-  const elapsed = (now - walk.phaseStartedAt) / 1000;
-  if (elapsed >= stopFollowSeconds) return 0;
-  return cameraSpeedMultiplier() * (1 - smoothstep(elapsed / stopFollowSeconds));
-}
-
-function advanceWalk(dt, now) {
-  if (walk.targetX === null) return true;
-  const remaining = walk.targetX - walk.actorX;
-  const step = Math.sign(remaining) * walk.speed * walkSpeedMultiplier(now) * dt;
-  if (Math.abs(remaining) <= Math.abs(step) || Math.abs(remaining) < 3) {
-    walk.actorX = walk.targetX;
-    walk.targetX = null;
-    return true;
-  }
-  walk.actorX += step;
-  return false;
-}
-
-function updateWalking(now) {
-  if (!currentMap) return;
-  if (!walk.lastTs) walk.lastTs = now;
-  const dt = Math.min(0.08, Math.max(0, (now - walk.lastTs) / 1000));
-  walk.lastTs = now;
-
-  if (isTunnelMode()) {
-    positionTunnelActor();
-    if (!speechBusy) {
-      if (currentScene === "idle" && idleFullPlay && activeVideo?.ended) {
-        currentScene = "";
-        currentVideo = "";
-        idleFullPlay = false;
-      }
-      if (!currentVideo || currentScene !== "idle") setScene("idle");
-    }
-    return;
-  }
-
-  if (speechBusy) {
-    updateSceneCamera(now, dt, false);
-    positionScene();
-    return;
-  }
-
-  updateSceneCamera(now, dt, true);
-
-  if (walk.pauseUntil && now < walk.pauseUntil) {
-    walk.phase = "idle";
-    setScene("idle");
-    positionScene();
-    return;
-  }
-
-  if (walk.targetX === null && walk.phase !== "start" && walk.phase !== "loop" && walk.phase !== "stop") {
-    chooseNextWalkTarget(now);
-  }
-
-  if (walk.phase === "start") {
-    advanceWalk(dt, now);
-    setScene(walkSceneFor(walk.direction, "start"), { loop: false, playbackRate: WALK_TRANSITION_PLAYBACK_RATE });
-    if (now >= walk.phaseUntil) {
-      walk.phase = "loop";
-      walk.phaseStartedAt = now;
-      walk.loopStartedAt = now;
-      walk.phaseUntil = 0;
-      if (walk.targetX === null) {
-        walk.targetX = walk.actorX + randomWalkDistance(walk.direction, walk.speed);
-      }
-      currentScene = "";
-    }
-    positionScene();
-    return;
-  }
-
-  if (walk.phase === "stop") {
-    const follow = stopFollowMultiplier(now);
-    if (follow > 0) {
-      const sign = walk.direction === "left" ? -1 : 1;
-      walk.actorX += sign * walk.speed * follow * dt;
-    }
-    setScene(walkSceneFor(walk.direction, "stop"), { loop: false, playbackRate: WALK_TRANSITION_PLAYBACK_RATE });
-    if (now >= walk.phaseUntil) {
-      walk.phase = "idle";
-      walk.loopStartedAt = 0;
-      walk.phaseUntil = 0;
-      walk.pauseUntil = now + 900 + Math.random() * 2400;
-      currentScene = "";
-      setScene("idle");
-    }
-    positionScene();
-    return;
-  }
-
-  walk.phase = "loop";
-  if (!walk.loopStartedAt) walk.loopStartedAt = now;
-  const reached = advanceWalk(dt, now);
-  const minLoopDone = now - walk.loopStartedAt >= walkLoopMs() * 0.96;
-  if (reached && !minLoopDone) {
-    const remainingSeconds = Math.max(0.25, (walkLoopMs() - (now - walk.loopStartedAt)) / 1000);
-    const sign = walk.direction === "left" ? -1 : 1;
-    walk.targetX = walk.actorX + sign * walk.speed * remainingSeconds;
-    setScene(walkSceneFor(walk.direction, "loop"), { loop: true });
-  } else if (reached) {
-    walk.phase = "stop";
-    walk.phaseStartedAt = now;
-    walk.loopStartedAt = 0;
-    walk.phaseUntil = now + walkStopMs();
-    activateMotionCameraShot("stop", now, walkStopMs() * 1.25);
-    currentScene = "";
-    setScene(walkSceneFor(walk.direction, "stop"), { loop: false, playbackRate: WALK_TRANSITION_PLAYBACK_RATE });
-  } else {
-    setScene(walkSceneFor(walk.direction, "loop"), { loop: true });
-  }
-  positionScene();
+function randomIntInclusive(min, max) {
+  return Math.round(
+    randomBetween(
+      Math.ceil(Number(min)),
+      Math.floor(Number(max))
+    )
+  );
 }
 
 function gameLoop(now) {
-  updateWalking(now);
+  lastGameLoopAt = performance.now();
+  maintainLiveAvatarScene();
+  recoverStalledActiveVideo(now);
   updateDynamicLiveCamera(now);
+  try {
+    window.BonecoLayoutRegistry?.update(
+      now,
+      {
+        musicEnergy,
+        musicBass,
+        tunnelHue,
+        tunnelPeople,
+        visualMode,
+        activeLayout,
+      }
+    );
+  } catch (err) {
+    console.warn(
+      "layout update failed",
+      activeLayout,
+      err
+    );
+  }
   requestAnimationFrame(gameLoop);
 }
 
@@ -2850,19 +1007,6 @@ function nextFrame() {
   return new Promise(resolve => requestAnimationFrame(() => resolve()));
 }
 
-function mediaForScene(scene) {
-  if (scene === "walk_start_right") return mediaState.walk_start_right?.length ? mediaState.walk_start_right : mediaState.walk_right;
-  if (scene === "walk_loop_right") return mediaState.walk_loop_right?.length ? mediaState.walk_loop_right : mediaState.walk_right;
-  if (scene === "walk_stop_right") return mediaState.walk_stop_right?.length ? mediaState.walk_stop_right : mediaState.walk_right;
-  if (scene === "walk_start_left") return mediaState.walk_start_left?.length ? mediaState.walk_start_left : mediaState.walk_left;
-  if (scene === "walk_loop_left") return mediaState.walk_loop_left?.length ? mediaState.walk_loop_left : mediaState.walk_left;
-  if (scene === "walk_stop_left") return mediaState.walk_stop_left?.length ? mediaState.walk_stop_left : mediaState.walk_left;
-  if (scene === "walk_right") return mediaState.walk_right;
-  if (scene === "walk_left") return mediaState.walk_left;
-  if (scene === "talking") return mediaState.talking;
-  return mediaState.idle;
-}
-
 function fileNameFromPath(path) {
   return String(path || "").split(/[\\/]/).pop() || "";
 }
@@ -2871,6 +1015,30 @@ function isDanceIdleVideo(path) {
   const file = fileNameFromPath(path);
   const stem = file.replace(/\.[^.]+$/, "");
   return /(^|[_\-\s])d($|[_\-\s])/i.test(stem);
+}
+
+function isManualSpeechJob(job) {
+  const metadata = job?.metadata && typeof job.metadata === "object" ? job.metadata : {};
+  return String(metadata.source || "").trim().toLowerCase() === "manual";
+}
+
+function speechSafeIdleMedia() {
+  const idle = Array.isArray(mediaState.idle) ? mediaState.idle : [];
+  return idle;
+}
+
+function manualSpeechMedia() {
+  const manualIdle = Array.isArray(mediaState.manual_idle) ? mediaState.manual_idle.filter(Boolean) : [];
+  return manualIdle;
+}
+
+function mediaForScene(scene) {
+  if (scene === "talking") return mediaState.talking;
+  if (isManualSpeechJob(activeSpeechJob) && scene === "idle") {
+    return manualSpeechMedia();
+  }
+  if (speechBusy || activeSpeechJob) return speechSafeIdleMedia();
+  return mediaState.idle;
 }
 
 function shouldHoldSpeechForIdleFullPlay() {
@@ -2891,12 +1059,604 @@ async function setScene(scene, options = {}) {
   }
   if (currentScene === scene && currentVideo && !options.force) return true;
   const list = mediaForScene(scene);
-  const path = pick(list, currentVideo) || pick(mediaState.idle, currentVideo);
+  const fallbackList =
+    isManualSpeechJob(activeSpeechJob)
+      ? (scene === "talking" ? mediaState.talking : manualSpeechMedia())
+      : (
+          speechBusy || activeSpeechJob || scene === "talking"
+            ? speechSafeIdleMedia()
+            : mediaState.idle
+        );
+  const path = pick(list, currentVideo) || pick(fallbackList, currentVideo);
   if (!path) return false;
   currentScene = scene;
-  const fullPlay = scene === "idle" && isDanceIdleVideo(path);
+  const fullPlay = scene === "idle" && isDanceIdleVideo(path) && !isManualSpeechJob(activeSpeechJob);
   return switchVideo(path, { ...options, loop: !fullPlay, fullPlay });
 }
+
+
+function rendererLayoutContext() {
+  return {
+    stage,
+    cameraLayer,
+    tunnelCanvas,
+    tunnelFloorCanvas,
+    tunnelCtx,
+    tunnelFloorCtx,
+    skyLayer,
+    world,
+    actorLayer,
+    mapBack,
+    mapFront,
+    tunnelWidth: TUNNEL_W,
+    tunnelHeight: TUNNEL_H,
+    clearTunnelFloorOverlay,
+    drawTunnelProfile,
+    mediaImageUrl,
+    tunnelImageEntry,
+    isTunnelMode,
+    getActiveLayout: () => activeLayout,
+    getVisualMode: () => visualMode,
+    getTunnelPeople: () => tunnelPeople,
+    getMusicState: () => ({
+      musicEnergy,
+      musicBass,
+      tunnelHue,
+    }),
+    getCameraState: () => ({
+      currentZoom: liveCamera.currentZoom,
+    }),
+  };
+}
+
+function layoutCatalogFromPayload(payload) {
+  const catalog =
+    payload?.layout?.catalog;
+
+  return Array.isArray(catalog)
+    ? catalog
+    : [];
+}
+
+function normalizeLayoutId(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
+}
+
+function layoutDefinition(payload, layoutId) {
+  const cleanId =
+    normalizeLayoutId(layoutId);
+
+  if (!cleanId) return null;
+
+  return (
+    layoutCatalogFromPayload(payload)
+      .find(
+        item =>
+          normalizeLayoutId(item?.id)
+          === cleanId
+      )
+    || null
+  );
+}
+
+function versionedStaticAsset(url) {
+  const clean =
+    String(url || "")
+      .trim();
+
+  if (!clean) return "";
+
+  const version =
+    encodeURIComponent(
+      `${mediaCacheVersion || "dev"}-${RENDERER_ASSET_VERSION}`
+    );
+
+  return clean.includes("?")
+    ? `${clean}&v=${version}`
+    : `${clean}?v=${version}`;
+}
+
+function setActiveLayoutStylesheet(layoutId) {
+  const active =
+    normalizeLayoutId(layoutId);
+
+  document
+    .querySelectorAll("link[data-layout-css-id]")
+    .forEach(link => {
+      link.disabled =
+        normalizeLayoutId(link.dataset.layoutCssId)
+        !== active;
+    });
+}
+
+function loadLayoutStylesheet(url, layoutId = "") {
+  const href =
+    versionedStaticAsset(url);
+
+  if (!href) return Promise.resolve();
+
+  const key = `css:${url}`;
+  const ownerId = normalizeLayoutId(layoutId);
+
+  if (loadedLayoutAssets.has(key)) {
+    setActiveLayoutStylesheet(ownerId);
+    return Promise.resolve();
+  }
+
+  if (loadingLayoutAssets.has(key)) {
+    return loadingLayoutAssets.get(key);
+  }
+
+  const pending =
+    new Promise((resolve, reject) => {
+      const link =
+        document.createElement("link");
+
+      link.rel = "stylesheet";
+      link.href = href;
+      link.dataset.layoutAsset = key;
+      link.dataset.layoutCssId = ownerId;
+      link.disabled = ownerId !== normalizeLayoutId(activeLayout);
+
+      link.onload = () => {
+        loadedLayoutAssets.add(key);
+        loadingLayoutAssets.delete(key);
+        setActiveLayoutStylesheet(activeLayout);
+        resolve();
+      };
+
+      link.onerror = () => {
+        loadingLayoutAssets.delete(key);
+        reject(
+          new Error(
+            `Falha ao carregar CSS do layout: ${url}`
+          )
+        );
+      };
+
+      document.head.appendChild(link);
+    });
+
+  loadingLayoutAssets.set(key, pending);
+  return pending;
+}
+
+function loadLayoutScript(url) {
+  const src =
+    versionedStaticAsset(url);
+
+  if (!src) return Promise.resolve();
+
+  const key = `js:${url}`;
+
+  if (loadedLayoutAssets.has(key)) {
+    return Promise.resolve();
+  }
+
+  if (loadingLayoutAssets.has(key)) {
+    return loadingLayoutAssets.get(key);
+  }
+
+  const pending =
+    new Promise((resolve, reject) => {
+      const script =
+        document.createElement("script");
+
+      script.src = src;
+      script.async = false;
+      script.dataset.layoutAsset = key;
+
+      script.onload = () => {
+        loadedLayoutAssets.add(key);
+        loadingLayoutAssets.delete(key);
+        resolve();
+      };
+
+      script.onerror = () => {
+        loadingLayoutAssets.delete(key);
+        reject(
+          new Error(
+            `Falha ao carregar JS do layout: ${url}`
+          )
+        );
+      };
+
+      document.body.appendChild(script);
+    });
+
+  loadingLayoutAssets.set(key, pending);
+  return pending;
+}
+
+async function ensureRendererLayoutAssets(layoutId, payload) {
+  const registry =
+    window.BonecoLayoutRegistry;
+
+  if (registry?.has(layoutId)) {
+    return true;
+  }
+
+  const definition =
+    layoutDefinition(payload, layoutId);
+
+  if (!definition) {
+    return false;
+  }
+
+  await loadLayoutStylesheet(
+    definition.css,
+    layoutId
+  );
+
+  await loadLayoutScript(
+    definition.frontend_module
+  );
+
+  return registry?.has(layoutId) === true;
+}
+
+function resolveRendererLayout(payload) {
+  const requested =
+    rendererPreviewMode && rendererPreviewLayout
+      ? rendererPreviewLayout
+      : String(
+          payload?.layout?.active_layout
+          || payload?.state?.active_layout
+          || payload?.state?.tunnel_style
+          || "classic"
+        ).trim();
+
+  const registry = window.BonecoLayoutRegistry;
+
+  if (registry?.has(requested)) {
+    return requested;
+  }
+
+  if (layoutDefinition(payload, requested)) {
+    return requested;
+  }
+
+  return "classic";
+}
+
+async function applyRendererLayout(payload) {
+  const activationToken = ++layoutActivationToken;
+  const nextLayout = normalizeLayoutId(resolveRendererLayout(payload));
+
+  activeLayout = nextLayout;
+
+  // Compatibilidade temporária da Fase 1:
+  // os desenhos ainda vivem no renderer.js.
+  tunnelStyle = nextLayout;
+
+  stage.dataset.layout = nextLayout;
+
+  const registry = window.BonecoLayoutRegistry;
+
+  if (!registry) return;
+
+  try {
+    const loaded =
+      await ensureRendererLayoutAssets(
+        nextLayout,
+        payload
+      );
+
+    if (activationToken !== layoutActivationToken) {
+      return;
+    }
+
+    if (!loaded) {
+      throw new Error(
+        `Layout sem módulo registrado: ${nextLayout}`
+      );
+    }
+
+    setActiveLayoutStylesheet(nextLayout);
+
+    await registry.activate(
+      nextLayout,
+      rendererLayoutContext()
+    );
+
+    if (activationToken !== layoutActivationToken) {
+      return;
+    }
+  } catch (err) {
+    console.warn(
+      "layout activation failed",
+      nextLayout,
+      err
+    );
+  }
+}
+
+function notifyActiveLayoutState(payload) {
+  const registry =
+    window.BonecoLayoutRegistry;
+
+  if (!registry) return;
+
+  registry.onState(payload);
+}
+
+function previewEventJob(event) {
+  const safeEvent =
+    event && typeof event === "object"
+      ? event
+      : {};
+
+  return {
+    id: `preview-${safeEvent.id || safeEvent.sequence || Date.now()}`,
+    actor: "main",
+    text: String(safeEvent.text || ""),
+    metadata: {
+      source: "preview_visual",
+      event: safeEvent,
+    },
+  };
+}
+
+function updatePreviewGiftLeaderboard(event) {
+  if (!event || String(event.kind || "") !== "gift") {
+    return;
+  }
+
+  const username =
+    String(event.username || "teste").trim()
+    || "teste";
+
+  const displayName =
+    String(
+      event.display_name
+      || username
+    ).trim()
+    || username;
+
+  const metadata =
+    event.metadata
+    && typeof event.metadata === "object"
+      ? event.metadata
+      : {};
+
+  const count =
+    Math.max(
+      1,
+      Number(metadata.count || 1)
+    );
+
+  const key =
+    username.toLowerCase();
+
+  const next =
+    previewGiftLeaderboard.map(
+      item => ({ ...item })
+    );
+
+  let entry =
+    next.find(
+      item =>
+        String(item.username || "")
+          .toLowerCase() === key
+    );
+
+  if (!entry) {
+    entry = {
+      username,
+      display_name: displayName,
+      total_count: 0,
+      count: 0,
+      gift_events: 0,
+      profile_image: "",
+      avatar_url: "",
+      updated_at: Date.now() / 1000,
+    };
+
+    next.push(entry);
+  }
+
+  entry.display_name = displayName;
+  entry.total_count =
+    Number(entry.total_count || 0)
+    + count;
+
+  entry.count =
+    entry.total_count;
+
+  entry.gift_events =
+    Number(entry.gift_events || 0)
+    + 1;
+
+  entry.updated_at =
+    Date.now() / 1000;
+
+  next.sort(
+    (a, b) =>
+      Number(b.total_count || 0)
+      - Number(a.total_count || 0)
+  );
+
+  previewGiftLeaderboard =
+    next.slice(0, 181);
+}
+
+function refreshPreviewGiftVisuals() {
+  if (
+    !rendererPreviewMode
+    || !previewGiftLeaderboard.length
+  ) {
+    return;
+  }
+
+  const leader =
+    previewGiftLeaderboard[0]
+    || null;
+
+  notifyActiveLayoutState({
+    gift_leaderboard: previewGiftLeaderboard,
+    top_gifter: leader,
+    visual_people: tunnelPeople,
+    state: {
+      active_layout: activeLayout,
+      visual_mode: visualMode,
+    },
+  });
+}
+
+async function playPreviewVisualEvent(event) {
+  if (!rendererPreviewMode) return;
+
+  const job =
+    previewEventJob(event);
+
+  if (
+    String(event?.kind || "")
+    === "gift"
+  ) {
+    updatePreviewGiftLeaderboard(
+      event
+    );
+
+    refreshPreviewGiftVisuals();
+  }
+
+  try {
+    showMessageCard(job);
+  } catch (err) {
+    console.warn("message card failed", err);
+    hideMessageCard();
+  }
+
+  await setScene(
+    "talking",
+    {
+      force: true,
+    }
+  ).catch(() => false);
+
+  if (activeVideo) {
+    activeVideo.muted = true;
+    activeVideo.volume = 0;
+  }
+
+  const duration =
+    String(event?.kind || "")
+      === "gift"
+      ? 2800
+      : 2300;
+
+  await new Promise(
+    resolve =>
+      window.setTimeout(
+        resolve,
+        duration
+      )
+  );
+
+  hideMessageCard();
+
+  await setScene(
+    "idle",
+    {
+      force: true,
+    }
+  ).catch(() => false);
+
+  if (activeVideo) {
+    activeVideo.muted = true;
+  }
+}
+
+async function drainPreviewVisualQueue() {
+  if (
+    !rendererPreviewMode
+    || previewVisualBusy
+  ) {
+    return;
+  }
+
+  previewVisualBusy = true;
+
+  try {
+    while (
+      previewVisualQueue.length
+    ) {
+      const event =
+        previewVisualQueue.shift();
+
+      await playPreviewVisualEvent(
+        event
+      );
+    }
+  } finally {
+    previewVisualBusy = false;
+  }
+}
+
+async function pollPreviewEvents() {
+  if (!rendererPreviewMode) return;
+
+  try {
+    const response =
+      await fetch(
+        `/api/renderer/preview-events?preview=1&after=${encodeURIComponent(previewEventCursor)}`,
+        {
+          cache: "no-store",
+        }
+      );
+
+    if (!response.ok) return;
+
+    const payload =
+      await response.json();
+
+    const events =
+      Array.isArray(payload.events)
+        ? payload.events
+        : [];
+
+    for (const event of events) {
+      const sequence =
+        Number(event?.sequence || 0);
+
+      if (
+        sequence
+        > previewEventCursor
+      ) {
+        previewEventCursor =
+          sequence;
+      }
+
+      previewVisualQueue.push(
+        event
+      );
+    }
+
+    const latest =
+      Number(
+        payload.latest_sequence
+        || 0
+      );
+
+    if (
+      latest
+      > previewEventCursor
+    ) {
+      previewEventCursor =
+        latest;
+    }
+
+    void drainPreviewVisualQueue();
+  } catch (err) {
+    console.warn(
+      "preview event polling failed",
+      err
+    );
+  }
+}
+
 
 async function pollState() {
   try {
@@ -2917,31 +1677,47 @@ async function pollState() {
       ...runtimeConfig,
       ...(payload.runtime || {}),
     };
-    walkMotion = { ...walkMotion, ...(payload.walk_motion || {}) };
     bellyProfileScale = clampNumber(payload.state?.belly_profile_scale, 0.45, 2.0, 0.82);
     bellyProfileOffsetX = clampNumber(payload.state?.belly_profile_offset_x, -120, 120, 0);
     bellyProfileOffsetY = clampNumber(payload.state?.belly_profile_offset_y, -120, 120, 0);
     normalizeLiveCameraConfig(payload.state || {});
-    tunnelStyle = String(payload.state?.tunnel_style || "classic");
-    visualMode = String(payload.state?.visual_mode || "tunnel") === "map" ? "map" : "tunnel";
+    await applyRendererLayout(payload);
+    visualMode = "tunnel";
     stage.dataset.visual = visualMode;
     stage.dataset.mode = String(urlMode || payload.state?.mode || "normal");
     syncMusicTracks(payload.music || []);
+    syncManualMusicTracks(payload.manual_music || []);
     syncTunnelPeople(payload.visual_people || []);
-    syncGiftWall(payload.gift_wall || []);
-    syncSuperCube(
-      payload.top_gifter || null,
-      String(payload.state?.tunnel_style || "classic")
-    );
-    if (isTunnelMode()) {
-      currentMap = payload.map || currentMap || {};
-      clearMapForTunnel();
-      positionTunnelActor();
-    } else {
-      renderMap(payload.map || {});
-      resetWalkForMap(payload.map || {});
-      applyCamera(payload.state?.camera || { x: 0, y: 0, zoom: 1 });
-    }
+    const stateGiftLeaderboard =
+      rendererPreviewMode
+      && previewGiftLeaderboard.length
+        ? previewGiftLeaderboard
+        : (
+            payload.gift_leaderboard
+            || []
+          );
+
+    const stateTopGifter =
+      rendererPreviewMode
+      && previewGiftLeaderboard.length
+        ? (
+            previewGiftLeaderboard[0]
+            || null
+          )
+        : (
+            payload.top_gifter
+            || null
+          );
+
+    notifyActiveLayoutState({
+      ...payload,
+      gift_leaderboard: stateGiftLeaderboard,
+      top_gifter: stateTopGifter,
+      visual_people: tunnelPeople,
+    });
+    currentMap = null;
+    clearMapForTunnel();
+    positionTunnelActor();
     if (!currentVideo) await setScene("idle");
   } catch (err) {
     console.warn("state failed", err);
@@ -3039,23 +1815,69 @@ async function maybePlayNaturalReaction(job) {
 
 
 async function pollSpeech() {
+  // Preview é estritamente visual e nunca toca na fila oficial.
+  if (rendererPreviewMode) return false;
+
+  if (
+    speechBusy
+    && speechDeadlineAt
+    && performance.now() > speechDeadlineAt
+  ) {
+    console.warn(
+      "speech watchdog releasing stuck job",
+      activeSpeechJob?.id || ""
+    );
+
+    await finishSpeechVisual(
+      activeSpeechToken,
+      activeSpeechJob
+    );
+  }
+
+  if (
+    speechFetchBusy
+    && speechStartedAt
+    && performance.now() - speechStartedAt > 7000
+  ) {
+    console.warn("speech fetch watchdog reset");
+    speechFetchBusy = false;
+    speechStartedAt = 0;
+  }
+
   if (speechBusy || speechFetchBusy || reactionBusy) return false;
   if (shouldHoldSpeechForIdleFullPlay()) return false;
   speechFetchBusy = true;
+  speechStartedAt = performance.now();
+  let consumedJob = null;
   try {
-    const response = await fetch("/api/renderer/next-speech", { cache: "no-store" });
-    const payload = await response.json();
+    const payload = await fetchJsonWithTimeout(
+      rendererPreviewMode
+        ? "/api/renderer/next-speech?preview=1"
+        : "/api/renderer/next-speech",
+      { cache: "no-store" },
+      4500
+    );
     if (!payload.job) return false;
+    consumedJob = payload.job;
     speechBusy = true;
-    await playSpeechJob(payload.job);
+    await playSpeechJob(consumedJob);
     return true;
   } catch (err) {
     console.warn("speech failed", err);
+    if (consumedJob) {
+      await acknowledgeSpeechFinished(consumedJob);
+    }
     speechBusy = false;
+    speechStartedAt = 0;
+    speechDeadlineAt = 0;
+    activeSpeechJob = null;
     hideMessageCard();
     return false;
   } finally {
     speechFetchBusy = false;
+    if (!speechBusy) {
+      speechStartedAt = 0;
+    }
   }
 }
 
@@ -3495,6 +2317,81 @@ function stopVideoWatchdog() {
   }
 }
 
+function sceneNeedsContinuousVideo(scene) {
+  const value = String(scene || "");
+  if (!value) return false;
+  if (value === "idle" || value === "reaction") return true;
+  return false;
+}
+
+function restartContinuousScene(scene) {
+  const value = String(scene || "");
+  if (value === "reaction") return setScene("idle", { force: true });
+  if (value === "idle") return setScene("idle", { force: true, loop: true });
+  return setScene(value, { force: true, loop: true });
+}
+
+function recoverStalledActiveVideo(now) {
+  if (!activeVideo || speechBusy) return;
+  if (!sceneNeedsContinuousVideo(currentScene)) {
+    generalVideoWatchdogState.src = "";
+    generalVideoWatchdogState.time = 0;
+    generalVideoWatchdogState.wallAt = 0;
+    return;
+  }
+
+  const video = activeVideo;
+  const src = video.currentSrc || video.src || currentVideo || "";
+  if (!src) return;
+
+  const currentTime = Number(video.currentTime || 0);
+  const state = generalVideoWatchdogState;
+  if (state.src !== src) {
+    state.src = src;
+    state.time = currentTime;
+    state.wallAt = now;
+    state.retryAt = 0;
+    state.recovering = false;
+    return;
+  }
+
+  const advanced = Math.abs(currentTime - Number(state.time || 0)) > 0.025;
+  if (!video.paused && !video.ended && advanced) {
+    state.time = currentTime;
+    state.wallAt = now;
+    return;
+  }
+
+  const stalledFor = Math.max(0, now - Number(state.wallAt || now));
+
+  if (!video.ended && now - Number(state.retryAt || 0) >= GENERAL_VIDEO_PLAY_RETRY_MS) {
+    state.retryAt = now;
+    video.play().catch(() => {});
+  }
+
+  if (stalledFor >= GENERAL_VIDEO_RESTART_MS && !state.recovering) {
+    state.recovering = true;
+    console.warn(
+      "general video watchdog restarting scene",
+      currentScene,
+      src
+    );
+    restartContinuousScene(currentScene)
+      .catch(err => console.warn("general video watchdog failed", err))
+      .finally(() => {
+        state.time = Number(activeVideo?.currentTime || 0);
+        state.wallAt = performance.now();
+        state.retryAt = 0;
+        state.recovering = false;
+      });
+  }
+
+  if (stalledFor >= GENERAL_VIDEO_RELOAD_MS) {
+    console.error("general video watchdog reloading renderer after stalled video");
+    window.location.reload();
+  }
+}
+
 function timelineSegmentAt(segments, seconds) {
   return segments.find(item => {
     const start = Number(item.start || 0);
@@ -3544,6 +2441,82 @@ async function timelineForJob(job) {
   }
 }
 
+function manualMusicPathForJob(job) {
+  const metadata =
+    job?.metadata && typeof job.metadata === "object"
+      ? job.metadata
+      : {};
+  if (String(metadata.source || "").trim().toLowerCase() !== "manual") {
+    return "";
+  }
+  return String(metadata.manual_music_path || "").trim();
+}
+
+function startManualSpeechMusic(job) {
+  const track = manualMusicPathForJob(job);
+  if (!track || !musicAudio) return;
+
+  const metadata =
+    job?.metadata && typeof job.metadata === "object"
+      ? job.metadata
+      : {};
+  const sequenceIndex = Number(metadata.manual_sequence_index || 0);
+
+  if (!manualSpeechMusicActive) {
+    manualSpeechMusicPrevious = musicTracks.includes(musicCurrent)
+      ? musicCurrent
+      : "";
+  }
+
+  manualSpeechMusicActive = true;
+  manualSpeechMusicTrack = track;
+  playMusicTrack(track, {
+    loop: true,
+    restart: sequenceIndex <= 0 || musicCurrent !== track,
+  });
+}
+
+function finishManualSpeechMusic(job) {
+  const metadata =
+    job?.metadata && typeof job.metadata === "object"
+      ? job.metadata
+      : {};
+
+  if (
+    String(metadata.source || "").trim().toLowerCase() !== "manual"
+    || !manualSpeechMusicActive
+  ) {
+    return;
+  }
+
+  if (metadata.manual_sequence_last !== true) {
+    return;
+  }
+
+  manualSpeechMusicActive = false;
+  manualSpeechMusicTrack = "";
+
+  const restore = musicTracks.includes(manualSpeechMusicPrevious)
+    ? manualSpeechMusicPrevious
+    : "";
+  manualSpeechMusicPrevious = "";
+
+  if (restore) {
+    playMusicTrack(restore, {
+      loop: musicTracks.length < 2,
+      restart: musicCurrent !== restore,
+    });
+    return;
+  }
+
+  if (musicTracks.length) {
+    playNextMusic(true);
+  } else if (musicAudio) {
+    musicAudio.pause();
+    musicCurrent = "";
+  }
+}
+
 function shouldSlowTimelineSegment(segment) {
   if (!segment) return false;
   if (segment.kind === "micro_pause") return true;
@@ -3561,6 +2534,99 @@ function shouldMuteTimelineSegment(segment) {
 function runtimeNumber(key, fallback) {
   const value = Number(runtimeConfig?.[key]);
   return Number.isFinite(value) ? value : fallback;
+}
+
+async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 5000) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(
+    () => controller.abort(),
+    timeoutMs
+  );
+
+  try {
+    const response = await fetch(
+      url,
+      {
+        ...options,
+        signal: controller.signal,
+      }
+    );
+
+    return await response.json();
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+function rendererHeartbeat() {
+  const now = performance.now();
+  const activeDuration =
+    Number.isFinite(activeVideo?.duration)
+      ? Number(activeVideo.duration || 0)
+      : 0;
+  const lastPresentedAt =
+    Number(videoWatchdogState?.lastPresentedFrameAt || 0);
+
+  const payload = {
+    preview: rendererPreviewMode,
+    active_layout: activeLayout,
+    visual_mode: visualMode,
+    current_scene: currentScene,
+    speech_busy: speechBusy,
+    speech_fetch_busy: speechFetchBusy,
+    reaction_busy: reactionBusy,
+    active_speech_job_id: activeSpeechJob?.id || "",
+    speech_age_ms:
+      speechStartedAt
+        ? Math.max(0, now - speechStartedAt)
+        : 0,
+    speech_deadline_ms:
+      speechDeadlineAt
+        ? Math.max(0, speechDeadlineAt - now)
+        : 0,
+    game_loop_age_ms:
+      lastGameLoopAt
+        ? Math.max(0, now - lastGameLoopAt)
+        : 0,
+    tunnel_draw_age_ms:
+      lastTunnelDrawAt
+        ? Math.max(0, now - lastTunnelDrawAt)
+        : 0,
+    active_video_paused: Boolean(activeVideo?.paused),
+    active_video_ended: Boolean(activeVideo?.ended),
+    active_video_ready_state: Number(activeVideo?.readyState || 0),
+    active_video_current_time: Number(activeVideo?.currentTime || 0),
+    active_video_duration: activeDuration,
+    idle_full_play: Boolean(idleFullPlay),
+    idle_full_play_age_ms:
+      idleFullPlayStartedAt
+        ? Math.max(0, now - idleFullPlayStartedAt)
+        : 0,
+    current_video: currentVideo || activeVideo?.currentSrc || activeVideo?.src || "",
+    video_watchdog_presented_frames: Number(videoWatchdogState?.presentedFrames || 0),
+    video_watchdog_age_ms:
+      lastPresentedAt
+        ? Math.max(0, now - lastPresentedAt)
+        : 0,
+    general_video_watchdog_recovering: Boolean(generalVideoWatchdogState.recovering),
+    general_video_watchdog_age_ms:
+      generalVideoWatchdogState.wallAt
+        ? Math.max(0, now - Number(generalVideoWatchdogState.wallAt || 0))
+        : 0,
+    location: window.location.href,
+  };
+
+  fetch(
+    "/api/renderer/heartbeat",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    }
+  ).catch(() => {});
 }
 
 function lastSegmentEnd(segments) {
@@ -3628,7 +2694,11 @@ function startLipSync(timeline, audio = sceneAudio, token = activeSpeechToken) {
       setVideoRate(1);
       setScene("idle").catch(console.warn);
     } else if (!visualMuted) {
-      setVideoRate(shouldSlowTimelineSegment(segment) ? MICRO_PAUSE_RATE : 1);
+      const pauseRate = Math.max(
+        0.10,
+        Math.min(1, runtimeNumber("micro_pause_rate", MICRO_PAUSE_RATE))
+      );
+      setVideoRate(shouldSlowTimelineSegment(segment) ? pauseRate : 1);
     }
     timelineFrame = requestAnimationFrame(tick);
   };
@@ -3636,6 +2706,9 @@ function startLipSync(timeline, audio = sceneAudio, token = activeSpeechToken) {
 }
 
 async function acknowledgeSpeechFinished(job) {
+  // Preview não confirma nem avança sequência oficial.
+  if (rendererPreviewMode) return true;
+
   const metadata =
     job?.metadata && typeof job.metadata === "object"
       ? job.metadata
@@ -3645,20 +2718,26 @@ async function acknowledgeSpeechFinished(job) {
     metadata.manual_sequence_id || ""
   ).trim();
 
-  if (!sequenceId) return true;
-
   const payload = {
     job_id: String(job?.id || ""),
     manual_sequence_id: sequenceId,
     manual_sequence_index: Number(
       metadata.manual_sequence_index
     ),
+    audio_path: String(job?.audio_path || ""),
+    timeline_path: String(
+      job?.timeline_path
+      || metadata.timeline_path
+      || ""
+    ),
   };
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       const response = await fetch(
-        "/api/renderer/speech-finished",
+        rendererPreviewMode
+          ? "/api/renderer/speech-finished?preview=1"
+          : "/api/renderer/speech-finished",
         {
           method: "POST",
           headers: {
@@ -3692,10 +2771,44 @@ async function playSpeechJob(job) {
   const token = ++activeSpeechToken;
   const timeline = await timelineForJob(job);
   const audioPath = String(job.audio_path || "");
-  const fallbackMs = Math.max(1600, Math.min(8500, String(job.text || "").length * 58));
+  const timelinePayload =
+    normalizeTimelinePayload(timeline);
+
+  const fallbackMs = Math.max(
+    1600,
+    Math.min(
+      8500,
+      String(job.text || "").length * 58
+    )
+  );
+
+  const expectedMs = Math.max(
+    fallbackMs,
+    Math.min(
+      SPEECH_STUCK_TIMEOUT_MS,
+      Math.ceil(
+        Number(timelinePayload.timelineEnd || 0)
+        * 1000
+      )
+      + 2500
+    )
+  );
 
   stopTimeline();
+  activeSpeechJob = job;
+  speechStartedAt = performance.now();
+  speechDeadlineAt =
+    speechStartedAt
+    + Math.max(
+        3500,
+        Math.min(
+          SPEECH_STUCK_TIMEOUT_MS,
+          expectedMs
+        )
+      );
+
   showMessageCard(job);
+  startManualSpeechMusic(job);
   sceneAudio.pause();
   sceneAudio.removeAttribute("src");
   sceneAudio.load();
@@ -3706,7 +2819,10 @@ async function playSpeechJob(job) {
   }
 
   if (!audioPath) {
-    window.setTimeout(() => finishSpeechVisual(token, job), fallbackMs);
+    window.setTimeout(
+      () => finishSpeechVisual(token, job),
+      fallbackMs
+    );
     return;
   }
 
@@ -3719,7 +2835,7 @@ async function playSpeechJob(job) {
   const finishOnce = () => finishSpeechVisual(token, job);
   sceneAudio.addEventListener("ended", finishOnce, { once: true });
   sceneAudio.addEventListener("error", finishOnce, { once: true });
-  startLipSync(timeline, sceneAudio, token);
+  startLipSync(timelinePayload, sceneAudio, token);
   await sceneAudio.play().catch(() => {
     audioUnlock.hidden = false;
     stopTimeline();
@@ -3743,6 +2859,10 @@ async function finishSpeechVisual(token = activeSpeechToken, job = null) {
   if (token !== activeSpeechToken) return;
 
   speechBusy = false;
+  speechStartedAt = 0;
+  speechDeadlineAt = 0;
+  activeSpeechJob = null;
+  finishManualSpeechMusic(job);
   onSpeechCompletedForCamera();
   await maybePlayNaturalReaction(job);
   const startedNext = await pollSpeech();
@@ -3753,7 +2873,18 @@ async function finishSpeechVisual(token = activeSpeechToken, job = null) {
 
 pollState();
 stage.dataset.visual = visualMode;
+stage.dataset.layout = activeLayout;
+rendererHeartbeat();
 requestAnimationFrame(gameLoop);
 requestAnimationFrame(drawTunnel);
 setInterval(pollState, 900);
 setInterval(pollSpeech, 350);
+setInterval(rendererHeartbeat, 2000);
+
+if (rendererPreviewMode) {
+  pollPreviewEvents();
+  setInterval(
+    pollPreviewEvents,
+    350
+  );
+}

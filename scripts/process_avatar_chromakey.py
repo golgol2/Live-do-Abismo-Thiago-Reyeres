@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
-"""Processa videos de caminhada com chroma key para WebM VP9 com alpha.
-
-Uso focado no avatar 2D: preserva/normaliza o tamanho dos videos de movimento
-para combinar com os videos Mudo/Falando e evita o fundo opaco cobrindo o mapa.
-"""
+"""Remove fundo verde dos videos do avatar e gera WebM VP9 com alpha."""
 
 from __future__ import annotations
 
 import argparse
 import shutil
 import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -22,20 +17,6 @@ except ModuleNotFoundError:
     np = None
 
 
-def parse_color(value: str) -> np.ndarray:
-    text = value.strip().lower().removeprefix("#").removeprefix("0x")
-    if len(text) != 6:
-        raise ValueError("Cor chave invalida. Use #RRGGBB.")
-    return np.array([int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16)], dtype=np.float32)
-
-
-def parse_color_tuple(value: str) -> tuple[int, int, int]:
-    text = value.strip().lower().removeprefix("#").removeprefix("0x")
-    if len(text) != 6:
-        raise ValueError("Cor chave invalida. Use #RRGGBB.")
-    return int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16)
-
-
 def backup_file(path: Path) -> None:
     if not path.exists():
         return
@@ -45,7 +26,26 @@ def backup_file(path: Path) -> None:
     shutil.copy2(path, backup)
 
 
-def build_alpha(frame_rgb: np.ndarray, key_rgb: np.ndarray, similarity: float, blend: float) -> np.ndarray:
+def parse_color_tuple(value: str) -> tuple[int, int, int]:
+    text = value.strip().lower().removeprefix("#").removeprefix("0x")
+    if len(text) != 6:
+        raise ValueError("Cor chave invalida. Use #RRGGBB.")
+    return int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16)
+
+
+def parse_color(value: str):
+    rgb = parse_color_tuple(value)
+    return np.array(rgb, dtype=np.float32)
+
+
+def process_video(args: argparse.Namespace) -> None:
+    if cv2 is not None and np is not None:
+        process_video_opencv(args)
+        return
+    process_video_ffmpeg(args)
+
+
+def build_alpha(frame_rgb, key_rgb, similarity: float, blend: float):
     distance = np.linalg.norm(frame_rgb.astype(np.float32) - key_rgb.reshape(1, 1, 3), axis=2)
     distance = distance / (np.sqrt(3) * 255.0)
     alpha = np.clip((distance - similarity) / max(0.001, blend), 0.0, 1.0)
@@ -53,9 +53,9 @@ def build_alpha(frame_rgb: np.ndarray, key_rgb: np.ndarray, similarity: float, b
 
 
 def process_frame(
-    frame_bgr: np.ndarray,
+    frame_bgr,
     *,
-    key_rgb: np.ndarray,
+    key_rgb,
     similarity: float,
     blend: float,
     edge_px: int,
@@ -63,7 +63,7 @@ def process_frame(
     despill: float,
     target_size: tuple[int, int] | None,
     fit: str,
-) -> np.ndarray:
+):
     frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     alpha = build_alpha(frame_rgb, key_rgb, similarity, blend)
 
@@ -122,18 +122,17 @@ def ffprobe_fps(path: Path) -> float:
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     text = (proc.stdout or "24/1").strip()
-    if "/" in text:
-        num, den = text.split("/", 1)
-        den_f = float(den or 1)
-        return float(num or 24) / (den_f if den_f else 1)
-    return float(text or 24)
+    try:
+        if "/" in text:
+            num, den = text.split("/", 1)
+            den_f = float(den or 1)
+            return float(num or 24) / (den_f if den_f else 1)
+        return float(text or 24)
+    except ValueError:
+        return 24.0
 
 
-def process_video(args: argparse.Namespace) -> None:
-    if cv2 is None or np is None:
-        process_video_ffmpeg(args)
-        return
-
+def process_video_opencv(args: argparse.Namespace) -> None:
     source = Path(args.source).expanduser().resolve()
     destination = Path(args.destination).expanduser().resolve()
     if not source.is_file():
@@ -145,7 +144,7 @@ def process_video(args: argparse.Namespace) -> None:
 
     source_fps = ffprobe_fps(source)
     speed = max(0.05, float(args.speed or 1.0))
-    fps = (args.fps or source_fps or 24.0) * speed
+    fps = (source_fps or 24.0) * speed
     src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
     target_size = None
@@ -154,15 +153,6 @@ def process_video(args: argparse.Namespace) -> None:
         out_w, out_h = target_size
     else:
         out_w, out_h = src_w, src_h
-
-    key_rgb = parse_color(args.key_color)
-    start = max(0.0, float(args.trim_start or 0.0))
-    end = max(0.0, float(args.trim_end or 0.0))
-    start_frame = int(round(start * source_fps))
-    end_frame = int(round(end * source_fps)) if end > start else 0
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    if start_frame:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     backup_file(destination)
@@ -193,6 +183,16 @@ def process_video(args: argparse.Namespace) -> None:
         "yuva420p",
         "-auto-alt-ref",
         "0",
+        "-row-mt",
+        "1",
+        "-threads",
+        "0",
+        "-deadline",
+        "good",
+        "-cpu-used",
+        str(args.cpu_used),
+        "-metadata:s:v:0",
+        "alpha_mode=1",
         "-b:v",
         "0",
         "-crf",
@@ -202,12 +202,10 @@ def process_video(args: argparse.Namespace) -> None:
     proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
     assert proc.stdin is not None
 
-    frame_index = start_frame
+    key_rgb = parse_color(args.key_color)
     written = 0
     try:
         while True:
-            if end_frame and frame_index >= end_frame:
-                break
             ok, frame = cap.read()
             if not ok:
                 break
@@ -226,23 +224,20 @@ def process_video(args: argparse.Namespace) -> None:
             )
             proc.stdin.write(rgba.tobytes())
             written += 1
-            frame_index += 1
     finally:
         cap.release()
         try:
             proc.stdin.close()
         except BrokenPipeError:
             pass
+
     rc = proc.wait()
     if rc != 0:
         raise RuntimeError(f"ffmpeg falhou ao gravar {destination} rc={rc}")
     if written <= 0:
         raise RuntimeError("Nenhum frame foi processado.")
     temp.replace(destination)
-    print(
-        f"ok {destination} frames={written} src={src_w}x{src_h} out={out_w}x{out_h} "
-        f"range={start_frame}:{end_frame or total_frames} speed={speed:.3f}x"
-    )
+    print(f"ok {destination} frames={written} src={src_w}x{src_h} out={out_w}x{out_h} speed={speed:.3f}x")
 
 
 def process_video_ffmpeg(args: argparse.Namespace) -> None:
@@ -263,31 +258,26 @@ def process_video_ffmpeg(args: argparse.Namespace) -> None:
     blend = max(0.0, min(1.0, float(args.blend)))
     despill = max(0.0, min(1.0, float(args.despill)))
     speed = max(0.05, float(args.speed or 1.0))
-    start = max(0.0, float(args.trim_start or 0.0))
-    end = max(0.0, float(args.trim_end or 0.0))
     edge = max(-8, min(8, int(args.edge_px or 0)))
     blur = max(0.0, min(8.0, float(args.blur_px or 0.0)))
     screen_type = "blue" if rgb[2] > rgb[1] and rgb[2] > rgb[0] else "green"
 
-    pre_filters = [
-        f"trim=start={start:.6f}:end={end:.6f}" if end > start else f"trim=start={start:.6f}",
-        f"setpts=(PTS-STARTPTS)/{speed:.6f}",
-    ]
+    filters = [f"setpts=PTS/{speed:.6f}"]
     if args.mirror:
-        pre_filters.append("hflip")
+        filters.append("hflip")
     if int(args.width) > 0 and int(args.height) > 0:
         if str(args.fit) == "stretch":
-            pre_filters.append(f"scale={int(args.width)}:{int(args.height)}:flags=lanczos")
+            filters.append(f"scale={int(args.width)}:{int(args.height)}:flags=lanczos")
         else:
-            pre_filters.append(
+            filters.append(
                 f"scale={int(args.width)}:{int(args.height)}:force_original_aspect_ratio=increase:flags=lanczos"
             )
-            pre_filters.append(f"crop={int(args.width)}:{int(args.height)}")
+            filters.append(f"crop={int(args.width)}:{int(args.height)}")
 
-    pre_filters.append("format=rgba")
+    filters.append("format=rgba")
     if despill > 0:
-        pre_filters.append(f"despill=type={screen_type}:mix={despill:.3f}:green=-1")
-    pre_filters.extend([f"colorkey={color_key}:{similarity:.4f}:{blend:.4f}", "format=rgba"])
+        filters.append(f"despill=type={screen_type}:mix={despill:.3f}:green=-1")
+    filters.extend([f"colorkey={color_key}:{similarity:.4f}:{blend:.4f}", "format=rgba"])
 
     alpha_filters: list[str] = []
     if edge > 0:
@@ -297,8 +287,9 @@ def process_video_ffmpeg(args: argparse.Namespace) -> None:
     if blur > 0:
         alpha_filters.append(f"boxblur=lr={blur:.2f}:lp=1")
     alpha_chain = ",".join(alpha_filters) if alpha_filters else "null"
+
     filter_expr = (
-        f"[0:v]{','.join(pre_filters)}[cksrc];"
+        f"[0:v]{','.join(filters)}[cksrc];"
         f"[cksrc]split[ck][ckalpha];"
         f"[ckalpha]alphaextract,{alpha_chain}[a];"
         f"[ck][a]alphamerge,format=yuva420p[v]"
@@ -322,6 +313,14 @@ def process_video_ffmpeg(args: argparse.Namespace) -> None:
         "yuva420p",
         "-auto-alt-ref",
         "0",
+        "-row-mt",
+        "1",
+        "-threads",
+        "0",
+        "-deadline",
+        "good",
+        "-cpu-used",
+        str(args.cpu_used),
         "-metadata:s:v:0",
         "alpha_mode=1",
         "-b:v",
@@ -338,7 +337,7 @@ def process_video_ffmpeg(args: argparse.Namespace) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Remove chroma de video andando e gera VP9 alpha.")
+    parser = argparse.ArgumentParser(description="Remove chroma de video do avatar e gera VP9 alpha.")
     parser.add_argument("--source", required=True)
     parser.add_argument("--destination", required=True)
     parser.add_argument("--key-color", default="#09e318")
@@ -347,14 +346,12 @@ def main() -> int:
     parser.add_argument("--edge-px", type=int, default=2)
     parser.add_argument("--blur-px", type=float, default=0.7)
     parser.add_argument("--despill", type=float, default=0.75)
-    parser.add_argument("--trim-start", type=float, default=0.0)
-    parser.add_argument("--trim-end", type=float, default=0.0)
     parser.add_argument("--width", type=int, default=832)
     parser.add_argument("--height", type=int, default=1472)
     parser.add_argument("--fit", choices=["cover", "stretch"], default="cover")
-    parser.add_argument("--fps", type=float, default=0.0)
     parser.add_argument("--speed", type=float, default=1.0)
     parser.add_argument("--crf", type=int, default=20)
+    parser.add_argument("--cpu-used", type=int, default=4)
     parser.add_argument("--mirror", action="store_true")
     args = parser.parse_args()
     process_video(args)

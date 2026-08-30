@@ -5,7 +5,7 @@ PROJECT_DIR="${BONECO_GAME_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 AVATAR="${1:-BONECO_MAPA_2D}"
 FORCE="${FORCE:-0}"
 PYTHON_BIN="$PROJECT_DIR/.venv/bin/python"
-PROCESSOR="$PROJECT_DIR/scripts/process_walk_chromakey.py"
+PROCESSOR="$PROJECT_DIR/scripts/process_avatar_chromakey.py"
 LOG_FILE="$PROJECT_DIR/runs/logs/process_green_avatar_videos.log"
 
 mkdir -p "$PROJECT_DIR/runs/logs"
@@ -13,6 +13,11 @@ cd "$PROJECT_DIR"
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
   echo "venv nao encontrada: $PYTHON_BIN" | tee -a "$LOG_FILE"
+  exit 1
+fi
+
+if [[ ! -f "$PROCESSOR" ]]; then
+  echo "processador nao encontrado: $PROCESSOR" | tee -a "$LOG_FILE"
   exit 1
 fi
 
@@ -33,6 +38,7 @@ process_mode() {
       echo "skip $destination" | tee -a "$LOG_FILE"
       continue
     fi
+
     echo "processando $source -> $destination" | tee -a "$LOG_FILE"
     "$PYTHON_BIN" "$PROCESSOR" \
       --source "$source" \
@@ -46,7 +52,8 @@ process_mode() {
       --width 832 \
       --height 1472 \
       --fit cover \
-      --crf 18 | tee -a "$LOG_FILE"
+      --crf 18 \
+      --cpu-used 6 | tee -a "$LOG_FILE"
 
     if [[ "$mode" == "Risadas" ]]; then
       local audio_tmp="$output_dir/.${stem}.audio.tmp.webm"

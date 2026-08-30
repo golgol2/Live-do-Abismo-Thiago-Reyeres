@@ -17,9 +17,8 @@ O projeto antigo não deve ser limpo até o novo ter:
 - Ambiente Python por hardlink para evitar reinstalação pesada.
 - Configurações privadas essenciais.
 - Avatar `BONECO_MAPA_2D`.
-- Mapa padrão.
-- Vídeos `Mudo`, `Falando`, `Andando_Direita`, `Andando_Esquerda`.
-- Base de painel, renderer e editor de mapa.
+- Vídeos `Mudo`, `Falando` e `Risadas`.
+- Base de painel, renderer e layouts de live.
 - TTS real com worker assíncrono.
 - Fila separada entre fala pendente e fala pronta.
 - Sincronização labial inicial por timeline de áudio.

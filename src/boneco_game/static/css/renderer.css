@@ -30,7 +30,10 @@ body {
   width: 720px;
   height: 1280px;
   overflow: hidden;
-  background: #010206;
+  background:
+    radial-gradient(circle at 50% 38%, rgba(57,34,108,.30), transparent 42%),
+    radial-gradient(circle at 20% 18%, rgba(73,35,65,.22), transparent 32%),
+    #010206;
   isolation: isolate;
   transform: scale(var(--stage-scale));
   transform-origin: top left;
@@ -82,7 +85,11 @@ body {
 
 #stage[data-visual="tunnel"] #world {
   z-index: 5;
-  transform: none !important;
+  transform:
+    var(--tunnel-world-transform, translate3d(0, 0, 0) scale(1))
+    !important;
+  transform-origin: 50% 50%;
+  will-change: transform;
 }
 
 #stage[data-visual="tunnel"] #actorLayer {
@@ -535,193 +542,21 @@ body {
 }
 
 
-#tunnelWallCanvas {
-  position: absolute;
-  inset: 0;
-  z-index: 4;
-  width: 720px;
-  height: 1280px;
-  pointer-events: none;
-  background: transparent;
-}
-
-#stage[data-visual="map"] #tunnelWallCanvas {
-  display: none;
-}
-
-/* ============================================================
+#stage[data-visual="map"] /* ============================================================
    SUPER CUBO — líder de presentes
    Fica atrás do world/actorLayer (world usa z-index 5).
    ============================================================ */
-.super-cube-layer {
-  --super-cube-size: 156px;
-  --super-cube-half: 78px;
-  position: absolute;
-  left: 50%;
-  top: 182px;
-  width: var(--super-cube-size);
-  height: calc(var(--super-cube-size) + 48px);
-  z-index: 4;
-  transform: translateX(-50%);
-  perspective: 820px;
-  transform-style: preserve-3d;
-  pointer-events: none;
-  overflow: visible;
-  animation: superCubeFloat 4.8s ease-in-out infinite;
-}
-
-.super-cube-layer[hidden] {
-  display: none !important;
-}
-
-.super-cube-glow {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 185px;
-  height: 185px;
-  border-radius: 50%;
-  transform: translate(-50%, -54%);
-  background:
-    radial-gradient(circle,
-      rgba(255,255,255,.18) 0 7%,
-      rgba(83,240,255,.20) 18%,
-      rgba(174,58,255,.13) 42%,
-      transparent 70%);
-  filter: blur(7px);
-  opacity: .86;
-  animation: superCubeGlow 2.8s ease-in-out infinite alternate;
-}
-
-.super-cube {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: var(--super-cube-size);
-  height: var(--super-cube-size);
-  transform-style: preserve-3d;
-  will-change: transform;
-  animation: superCubeSpin 12s linear infinite;
-}
-
-.super-cube-face {
-  position: absolute;
-  inset: 0;
-  width: var(--super-cube-size);
-  height: var(--super-cube-size);
-  overflow: hidden;
-  backface-visibility: visible;
-  background:
-    linear-gradient(135deg, rgba(15,22,38,.98), rgba(2,4,11,.98));
-  border: 2px solid rgba(125,245,255,.82);
-  box-shadow:
-    inset 0 0 18px rgba(255,255,255,.10),
-    inset 0 0 34px rgba(87,56,255,.18),
-    0 0 13px rgba(73,231,255,.34);
-}
-
-.super-cube-face::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    linear-gradient(145deg,
-      rgba(255,255,255,.16),
-      transparent 28%,
-      transparent 68%,
-      rgba(87,220,255,.15));
-  box-shadow: inset 0 0 24px rgba(0,0,0,.20);
-}
-
-.super-cube-image {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  display: block;
-  object-fit: cover;
-  object-position: center center;
-}
-
-.super-cube-image[hidden] {
-  display: none !important;
-}
-
-.super-cube-fallback {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  font-size: 54px;
-  font-weight: 800;
-  line-height: 1;
-  color: rgba(255,255,255,.92);
-  text-shadow: 0 0 16px rgba(76,230,255,.58);
-  background:
-    radial-gradient(circle at 34% 28%, rgba(99,246,255,.30), transparent 34%),
-    linear-gradient(135deg, rgba(69,35,130,.94), rgba(4,12,26,.98));
-}
-
-.super-cube-fallback[hidden] {
-  display: none !important;
-}
-
-.super-cube-front  { transform: rotateY(0deg) translateZ(var(--super-cube-half)); }
-.super-cube-back   { transform: rotateY(180deg) translateZ(var(--super-cube-half)); }
-.super-cube-right  { transform: rotateY(90deg) translateZ(var(--super-cube-half)); }
-.super-cube-left   { transform: rotateY(-90deg) translateZ(var(--super-cube-half)); }
-.super-cube-top    { transform: rotateX(90deg) translateZ(var(--super-cube-half)); }
-.super-cube-bottom { transform: rotateX(-90deg) translateZ(var(--super-cube-half)); }
-
-.super-cube-caption {
-  position: absolute;
-  left: 50%;
-  top: calc(var(--super-cube-size) + 14px);
-  min-width: 170px;
-  max-width: 230px;
-  transform: translateX(-50%);
-  padding: 5px 10px 6px;
-  border-radius: 12px;
-  text-align: center;
-  background: rgba(2,5,12,.76);
-  border: 1px solid rgba(112,239,255,.36);
-  box-shadow: 0 0 14px rgba(65,217,255,.12);
-  backdrop-filter: blur(2px);
-}
-
-.super-cube-caption strong,
-.super-cube-caption span {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.super-cube-caption strong {
-  color: rgba(255,255,255,.94);
-  font-size: 12px;
-  line-height: 1.15;
-  letter-spacing: .2px;
-}
-
-.super-cube-caption span {
-  margin-top: 2px;
-  color: rgba(127,244,255,.88);
-  font-size: 10px;
-  line-height: 1.1;
-}
-
-#stage[data-visual="map"] .super-cube-layer {
   display: none !important;
 }
 
 @keyframes superCubeSpin {
-  0%   { transform: rotateX(-12deg) rotateY(0deg) rotateZ(1deg); }
-  25%  { transform: rotateX(8deg) rotateY(90deg) rotateZ(-1deg); }
-  50%  { transform: rotateX(-6deg) rotateY(180deg) rotateZ(1deg); }
-  75%  { transform: rotateX(10deg) rotateY(270deg) rotateZ(-1deg); }
-  100% { transform: rotateX(-12deg) rotateY(360deg) rotateZ(1deg); }
+  0%   { transform: rotateX(-18deg) rotateY(0deg) rotateZ(-4deg); }
+  16%  { transform: rotateX(24deg) rotateY(72deg) rotateZ(8deg); }
+  33%  { transform: rotateX(-30deg) rotateY(148deg) rotateZ(-10deg); }
+  50%  { transform: rotateX(18deg) rotateY(220deg) rotateZ(13deg); }
+  67%  { transform: rotateX(-12deg) rotateY(294deg) rotateZ(-8deg); }
+  84%  { transform: rotateX(28deg) rotateY(354deg) rotateZ(10deg); }
+  100% { transform: rotateX(-18deg) rotateY(432deg) rotateZ(-4deg); }
 }
 
 @keyframes superCubeFloat {
@@ -732,4 +567,71 @@ body {
 @keyframes superCubeGlow {
   from { opacity: .58; transform: translate(-50%, -54%) scale(.93); }
   to   { opacity: .94; transform: translate(-50%, -54%) scale(1.08); }
+}
+
+#stage[data-camera-distance="distant"] #world {
+  transform-origin: 50% 100% !important;
+}
+
+#stage[data-camera-distance="normal"] #world {
+  transform-origin: 50% 50%;
+}
+
+/* No distante o cenário procedural continua cobrindo toda a saída.
+   Piso e paredes são reprojetados pelo JS, portanto não há moldura preta. */
+#stage[data-camera-distance="distant"] #tunnelCanvas,
+#stage[data-camera-distance="distant"] #tunnelFloorCanvas,
+#stage[data-camera-distance="distant"]
+
+/* ============================================================
+   SUPER CUBO SOCIAL - grade 6x6 estilo cubo magico
+   ============================================================ */
+  min-width: 170px;
+  transform: translateX(-50%);
+  text-align: center;
+}
+
+@keyframes superCubeSocialSpin {
+  0% {
+    transform:
+      rotateX(-18deg)
+      rotateY(0deg)
+      rotateZ(-4deg);
+  }
+  16% {
+    transform:
+      rotateX(24deg)
+      rotateY(72deg)
+      rotateZ(8deg);
+  }
+  33% {
+    transform:
+      rotateX(-30deg)
+      rotateY(148deg)
+      rotateZ(-10deg);
+  }
+  50% {
+    transform:
+      rotateX(18deg)
+      rotateY(220deg)
+      rotateZ(13deg);
+  }
+  67% {
+    transform:
+      rotateX(-12deg)
+      rotateY(294deg)
+      rotateZ(-8deg);
+  }
+  84% {
+    transform:
+      rotateX(28deg)
+      rotateY(354deg)
+      rotateZ(10deg);
+  }
+  100% {
+    transform:
+      rotateX(-18deg)
+      rotateY(432deg)
+      rotateZ(-4deg);
+  }
 }

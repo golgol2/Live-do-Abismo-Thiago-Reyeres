@@ -51,7 +51,7 @@ def status(avatar: str = "BONECO_MAPA_2D") -> dict[str, Any]:
     safe_avatar = _safe_avatar(avatar)
     stored = read_json(STATUS_FILE, {})
     result = stored if isinstance(stored, dict) else {}
-    running = bool(_WORKER and _WORKER.is_alive())
+    running = _is_running(safe_avatar)
 
     if result.get("state") in {"running", "starting"} and not running:
         result = {
@@ -70,6 +70,67 @@ def status(avatar: str = "BONECO_MAPA_2D") -> dict[str, Any]:
         "running": running,
         "pending": len(pending) if not running else int(result.get("pending") or 0),
     }
+    if running and str(result.get("state") or "") in {"error", "interrupted", "idle", "done", "partial"}:
+        result = {
+            **result,
+            "ok": True,
+            "state": "running",
+            "running": True,
+            "message": "Processamento em andamento...",
+            "finished_at": None,
+        }
+    if (
+        not running
+        and str(result.get("state") or "") == "error"
+        and PROCESS_SCRIPT.is_file()
+        and "Script não encontrado" in f"{result.get('message') or ''} {result.get('error') or ''}"
+    ):
+        result = {
+            "ok": True,
+            "avatar": safe_avatar,
+            "running": False,
+            "state": "idle",
+            "pending": len(pending),
+            "total": 0,
+            "completed": 0,
+            "progress": 0,
+            "current_file": "",
+            "message": "Script encontrado. Pronto para processar vídeos pendentes.",
+            "log_tail": [],
+        }
+        _write_status(result)
+    if not running and str(result.get("state") or "") in {"error", "interrupted"}:
+        if not pending:
+            result = {
+                "ok": True,
+                "avatar": safe_avatar,
+                "running": False,
+                "state": "done",
+                "pending": 0,
+                "total": int(result.get("total") or 0),
+                "completed": int(result.get("total") or result.get("completed") or 0),
+                "progress": 100,
+                "current_file": "",
+                "message": "Processamento concluído.",
+                "finished_at": time.time(),
+                "log_tail": result.get("log_tail") if isinstance(result.get("log_tail"), list) else [],
+            }
+            _write_status(result)
+        elif "código -15" in f"{result.get('message') or ''} {result.get('error') or ''}":
+            result = {
+                "ok": True,
+                "avatar": safe_avatar,
+                "running": False,
+                "state": "idle",
+                "pending": len(pending),
+                "total": 0,
+                "completed": 0,
+                "progress": 0,
+                "current_file": "",
+                "message": "Pronto para processar vídeos pendentes.",
+                "log_tail": [],
+            }
+            _write_status(result)
     if not result:
         result = {
             "avatar": safe_avatar,
@@ -97,7 +158,7 @@ def start(avatar: str = "BONECO_MAPA_2D", *, force: bool = False) -> dict[str, A
     global _WORKER
     safe_avatar = _safe_avatar(avatar)
     with _LOCK:
-        if _WORKER and _WORKER.is_alive():
+        if _is_running(safe_avatar):
             return {**status(safe_avatar), "ok": False, "error": "Já existe um processamento em andamento."}
 
         pending = pending_videos(safe_avatar)
@@ -247,6 +308,27 @@ def _safe_avatar(value: str) -> str:
     if not avatar or avatar in {".", ".."} or "/" in avatar or "\\" in avatar:
         raise ValueError("Avatar inválido.")
     return avatar
+
+
+def _is_running(avatar: str) -> bool:
+    if _WORKER and _WORKER.is_alive():
+        return True
+    script = str(PROCESS_SCRIPT)
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            raw = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        if not raw:
+            continue
+        args = [part.decode("utf-8", errors="ignore") for part in raw.split(b"\0") if part]
+        if len(args) < 2:
+            continue
+        if script in args and avatar in args:
+            return True
+    return False
 
 
 def _write_status(payload: dict[str, Any]) -> None:

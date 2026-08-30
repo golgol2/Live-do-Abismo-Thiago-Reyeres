@@ -58,7 +58,7 @@ async def api_renderer_heartbeat(request: Request) -> JSONResponse:
         "lineno": int(payload.get("lineno") or 0),
         "colno": int(payload.get("colno") or 0),
         "game_loop_age_ms": float(payload.get("game_loop_age_ms") or 0),
-        "tunnel_draw_age_ms": float(payload.get("tunnel_draw_age_ms") or 0),
+        "layout_draw_age_ms": float(payload.get("layout_draw_age_ms") or 0),
         "active_video_paused": bool(payload.get("active_video_paused")),
         "active_video_ended": bool(payload.get("active_video_ended")),
         "active_video_ready_state": int(payload.get("active_video_ready_state") or 0),

@@ -61,7 +61,7 @@ body {
   will-change: transform;
 }
 
-#tunnelCanvas {
+#layoutCanvas {
   position: absolute;
   inset: 0;
   z-index: 1;
@@ -71,28 +71,28 @@ body {
   background: #02030a;
 }
 
-#stage[data-visual="map"] #tunnelCanvas {
+#stage[data-visual="map"] #layoutCanvas {
   display: none;
 }
 
-#stage[data-visual="tunnel"] .skyLayer,
-#stage[data-visual="tunnel"] #mapLower,
-#stage[data-visual="tunnel"] #mapBack,
-#stage[data-visual="tunnel"] #mapFront {
+#stage[data-visual="layout"] .skyLayer,
+#stage[data-visual="layout"] #mapLower,
+#stage[data-visual="layout"] #mapBack,
+#stage[data-visual="layout"] #mapFront {
   opacity: 0;
   visibility: hidden;
 }
 
-#stage[data-visual="tunnel"] #world {
+#stage[data-visual="layout"] #world {
   z-index: 5;
   transform:
-    var(--tunnel-world-transform, translate3d(0, 0, 0) scale(1))
+    var(--layout-world-transform, translate3d(0, 0, 0) scale(1))
     !important;
   transform-origin: 50% 50%;
   will-change: transform;
 }
 
-#stage[data-visual="tunnel"] #actorLayer {
+#stage[data-visual="layout"] #actorLayer {
   transform: translate3d(0, 0, 0) scale(1);
 }
 
@@ -527,7 +527,7 @@ body {
   display: none;
 }
 
-#tunnelFloorCanvas {
+#layoutOverlayCanvas {
   position: absolute;
   inset: 0;
   z-index: 3;
@@ -537,36 +537,8 @@ body {
   background: transparent;
 }
 
-#stage[data-visual="map"] #tunnelFloorCanvas {
+#stage[data-visual="map"] #layoutOverlayCanvas {
   display: none;
-}
-
-
-#stage[data-visual="map"] /* ============================================================
-   SUPER CUBO — líder de presentes
-   Fica atrás do world/actorLayer (world usa z-index 5).
-   ============================================================ */
-  display: none !important;
-}
-
-@keyframes superCubeSpin {
-  0%   { transform: rotateX(-18deg) rotateY(0deg) rotateZ(-4deg); }
-  16%  { transform: rotateX(24deg) rotateY(72deg) rotateZ(8deg); }
-  33%  { transform: rotateX(-30deg) rotateY(148deg) rotateZ(-10deg); }
-  50%  { transform: rotateX(18deg) rotateY(220deg) rotateZ(13deg); }
-  67%  { transform: rotateX(-12deg) rotateY(294deg) rotateZ(-8deg); }
-  84%  { transform: rotateX(28deg) rotateY(354deg) rotateZ(10deg); }
-  100% { transform: rotateX(-18deg) rotateY(432deg) rotateZ(-4deg); }
-}
-
-@keyframes superCubeFloat {
-  0%, 100% { margin-top: 0; }
-  50% { margin-top: -9px; }
-}
-
-@keyframes superCubeGlow {
-  from { opacity: .58; transform: translate(-50%, -54%) scale(.93); }
-  to   { opacity: .94; transform: translate(-50%, -54%) scale(1.08); }
 }
 
 #stage[data-camera-distance="distant"] #world {
@@ -575,63 +547,4 @@ body {
 
 #stage[data-camera-distance="normal"] #world {
   transform-origin: 50% 50%;
-}
-
-/* No distante o cenário procedural continua cobrindo toda a saída.
-   Piso e paredes são reprojetados pelo JS, portanto não há moldura preta. */
-#stage[data-camera-distance="distant"] #tunnelCanvas,
-#stage[data-camera-distance="distant"] #tunnelFloorCanvas,
-#stage[data-camera-distance="distant"]
-
-/* ============================================================
-   SUPER CUBO SOCIAL - grade 6x6 estilo cubo magico
-   ============================================================ */
-  min-width: 170px;
-  transform: translateX(-50%);
-  text-align: center;
-}
-
-@keyframes superCubeSocialSpin {
-  0% {
-    transform:
-      rotateX(-18deg)
-      rotateY(0deg)
-      rotateZ(-4deg);
-  }
-  16% {
-    transform:
-      rotateX(24deg)
-      rotateY(72deg)
-      rotateZ(8deg);
-  }
-  33% {
-    transform:
-      rotateX(-30deg)
-      rotateY(148deg)
-      rotateZ(-10deg);
-  }
-  50% {
-    transform:
-      rotateX(18deg)
-      rotateY(220deg)
-      rotateZ(13deg);
-  }
-  67% {
-    transform:
-      rotateX(-12deg)
-      rotateY(294deg)
-      rotateZ(-8deg);
-  }
-  84% {
-    transform:
-      rotateX(28deg)
-      rotateY(354deg)
-      rotateZ(10deg);
-  }
-  100% {
-    transform:
-      rotateX(-18deg)
-      rotateY(432deg)
-      rotateZ(-4deg);
-  }
 }

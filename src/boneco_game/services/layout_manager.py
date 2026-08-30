@@ -19,10 +19,9 @@ _RANDOM = random.SystemRandom()
 LAYOUT_CATALOG: tuple[dict[str, object], ...] = (
     {
         "id": "classic",
-        "name": "Túnel Classic",
-        "description": "Túnel procedural clássico.",
+        "name": "Classic",
+        "description": "Cenário procedural clássico.",
         "enabled_by_default": True,
-        "legacy_tunnel_style": "classic",
         "backend_module": "classic",
         "backend_route": "/api/layouts/classic",
         "frontend_module": "/static/js/layouts/classic.js",
@@ -33,7 +32,6 @@ LAYOUT_CATALOG: tuple[dict[str, object], ...] = (
         "name": "Catedral Orbital",
         "description": "Plasma, piso orbital, linhas e Super Cubo Social.",
         "enabled_by_default": True,
-        "legacy_tunnel_style": "orbital_cathedral",
         "backend_module": "orbital_cathedral",
         "backend_route": "/api/layouts/orbital_cathedral",
         "frontend_module": "/static/js/layouts/orbital_cathedral.js",
@@ -44,7 +42,6 @@ LAYOUT_CATALOG: tuple[dict[str, object], ...] = (
         "name": "Torre Triangular Neon",
         "description": "Piso triangular escuro, energia RGB e torre 3D com fotos dos usuarios.",
         "enabled_by_default": True,
-        "legacy_tunnel_style": "neon_triangle_tower",
         "backend_module": "neon_triangle_tower",
         "backend_route": "/api/layouts/neon_triangle_tower",
         "frontend_module": "/static/js/layouts/neon_triangle_tower.js",

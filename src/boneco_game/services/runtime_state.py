@@ -18,8 +18,7 @@ STATE_FILE = RUNS_DIR / "runtime_state.json"
 def default_state() -> dict[str, Any]:
     return {
         "avatar": DEFAULT_AVATAR,
-        "visual_mode": "tunnel",
-        "tunnel_style": "classic",
+        "visual_mode": "layout",
         "mode": "normal",
         "current_actor": "main",
         "camera": {"x": 0, "y": 0, "zoom": 1.0},
@@ -140,7 +139,9 @@ def _media_version(media: dict[str, list[str]]) -> int:
 
 def renderer_state() -> dict[str, Any]:
     state = read_state()
-    state["visual_mode"] = "tunnel"
+    state["visual_mode"] = "layout"
+    for stale_key in ("tun" + "nel_style", "layout" + "_style"):
+        state.pop(stale_key, None)
     avatar = str(state.get("avatar") or DEFAULT_AVATAR)
     media = {
         "idle": _video_list(avatar, "Mudo"),

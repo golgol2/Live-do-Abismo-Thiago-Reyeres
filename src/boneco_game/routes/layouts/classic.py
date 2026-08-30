@@ -18,7 +18,7 @@ def api_classic_info() -> JSONResponse:
     return JSONResponse({
         "ok": True,
         "id": "classic",
-        "name": "Túnel Classic",
+        "name": "Classic",
         "backend": "isolated",
         "legacy_renderer": True,
     })

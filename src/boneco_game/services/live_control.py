@@ -109,15 +109,14 @@ def start_live(payload: dict[str, Any] | None = None) -> dict[str, Any]:
 
     previous_state = read_state()
 
-    previous_tunnel_style = str(
-        previous_state.get("tunnel_style")
+    previous_layout = str(
+        previous_state.get("active_layout")
         or "classic"
     )
 
     layout_session = reserve_layout_session(
         previous_layout=str(
-            previous_state.get("active_layout")
-            or previous_tunnel_style
+            previous_layout
             or ""
         )
     )
@@ -137,7 +136,6 @@ def start_live(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     update_state(
         mode=mode,
         current_actor="main",
-        tunnel_style=active_layout,
         camera={"x": 0, "y": 0, "zoom": 1.06 if mode == "battle" else 1},
     )
 
@@ -155,9 +153,6 @@ def start_live(payload: dict[str, Any] | None = None) -> dict[str, Any]:
         except RuntimeError as exc:
             cancel_layout_session(
                 layout_session_id
-            )
-            update_state(
-                tunnel_style=previous_tunnel_style
             )
             return _result(False, "error", str(exc) or "Falha ao gerar credenciais Streamlabs.", config)
         rtmp_url = credentials.rtmp_url
@@ -188,9 +183,6 @@ def start_live(payload: dict[str, Any] | None = None) -> dict[str, Any]:
         if not renderer.get("running"):
             cancel_layout_session(
                 layout_session_id
-            )
-            update_state(
-                tunnel_style=previous_tunnel_style
             )
             return _result(False, "error", str(renderer.get("last_error") or "Falha ao abrir renderer."), config, renderer=renderer)
         monitor = start_monitor(
@@ -224,10 +216,6 @@ def start_live(payload: dict[str, Any] | None = None) -> dict[str, Any]:
 
         cancel_layout_session(
             layout_session_id
-        )
-
-        update_state(
-            tunnel_style=previous_tunnel_style
         )
 
         return _result(

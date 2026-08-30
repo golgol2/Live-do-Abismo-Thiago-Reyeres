@@ -8,48 +8,130 @@
     return;
   }
 
-  const TUNNEL_W = 360;
-  const TUNNEL_H = 640;
+  const LAYOUT_W = 360;
+  const LAYOUT_H = 640;
 
-  let tunnelCanvas = null;
-  let tunnelFloorCanvas = null;
-  let tunnelCtx = null;
-  let tunnelFloorCtx = null;
+  let layoutCanvas = null;
+  let layoutOverlayCanvas = null;
+  let layoutCtx = null;
+  let layoutOverlayCtx = null;
   let musicEnergy = 0;
   let musicBass = 0;
-  let tunnelHue = 144;
-  let tunnelPeople = [];
-  let tunnelImageEntry = () => null;
-  let drawTunnelProfile = () => false;
+  let visualHue = 144;
+  let visualPeople = [];
+  let visualImageEntry = () => null;
+  let drawVisualProfile = () => false;
   let mediaImageUrl = value => String(value || "");
-  let isTunnelMode = () => true;
+  let isLayoutVisualMode = () => true;
   let liveCamera = { currentZoom: 1 };
+  let orbitalCubeLayer = null;
 
   function randomBetween(min, max) {
     return Number(min || 0) + Math.random() * (Number(max || 0) - Number(min || 0));
   }
 
+  function ensureSuperCubeLayer(context = {}) {
+    const existing =
+      orbitalCubeLayer ||
+      document.getElementById("orbitalSuperCubeLayer");
+
+    if (existing) {
+      orbitalCubeLayer = existing;
+      return existing;
+    }
+
+    const layer = document.createElement("div");
+    layer.id = "orbitalSuperCubeLayer";
+    layer.className = "orbital-cube-layer";
+    layer.hidden = true;
+    layer.setAttribute("aria-hidden", "true");
+
+    const glow = document.createElement("div");
+    glow.className = "orbital-cube-glow";
+
+    const cube = document.createElement("div");
+    cube.id = "orbitalSuperCube";
+    cube.className = "orbital-cube";
+
+    for (const [index, name] of [
+      "front",
+      "back",
+      "right",
+      "left",
+      "top",
+      "bottom",
+    ].entries()) {
+      const face = document.createElement("div");
+      face.className = `orbital-cube-face orbital-cube-${name}`;
+      face.dataset.face = String(index);
+      cube.appendChild(face);
+    }
+
+    const caption = document.createElement("div");
+    caption.className = "orbital-cube-caption";
+
+    const captionName = document.createElement("strong");
+    captionName.id = "orbitalSuperCubeName";
+    captionName.textContent = "TOP PRESENTES";
+
+    const captionScore = document.createElement("span");
+    captionScore.id = "orbitalSuperCubeScore";
+    captionScore.textContent = "aguardando presentes";
+
+    caption.append(captionName, captionScore);
+    layer.append(glow, cube, caption);
+
+    const parent =
+      context?.cameraLayer ||
+      context?.stage ||
+      document.getElementById("cameraLayer") ||
+      document.getElementById("stage") ||
+      document.body;
+
+    if (context?.world && context.world.parentElement === parent) {
+      parent.insertBefore(layer, context.world);
+    } else {
+      parent.appendChild(layer);
+    }
+
+    orbitalCubeLayer = layer;
+    return layer;
+  }
+
+  function destroySuperCubeLayer() {
+    const layer =
+      orbitalCubeLayer ||
+      document.getElementById("orbitalSuperCubeLayer");
+
+    if (layer) {
+      layer.remove();
+    }
+
+    orbitalCubeLayer = null;
+    socialGiftCubeSignature = "";
+  }
+
   function syncContext(context, state = {}) {
-    tunnelCanvas = context?.tunnelCanvas || null;
-    tunnelFloorCanvas = context?.tunnelFloorCanvas || null;
-    tunnelCtx = context?.tunnelCtx || null;
-    tunnelFloorCtx = context?.tunnelFloorCtx || null;
-    tunnelImageEntry = context?.tunnelImageEntry || (() => null);
-    drawTunnelProfile = context?.drawTunnelProfile || (() => false);
+    layoutCanvas = context?.layoutCanvas || null;
+    layoutOverlayCanvas = context?.layoutOverlayCanvas || null;
+    layoutCtx = context?.layoutCtx || null;
+    layoutOverlayCtx = context?.layoutOverlayCtx || null;
+    visualImageEntry = context?.visualImageEntry || (() => null);
+    drawVisualProfile = context?.drawVisualProfile || (() => false);
     mediaImageUrl = context?.mediaImageUrl || (value => String(value || ""));
-    isTunnelMode = context?.isTunnelMode || (() => true);
+    isLayoutVisualMode = context?.isLayoutVisualMode || (() => true);
     liveCamera = context?.getCameraState?.() || { currentZoom: 1 };
 
     const music = context?.getMusicState?.() || {};
     musicEnergy = Number(state.musicEnergy ?? music.musicEnergy ?? 0);
     musicBass = Number(state.musicBass ?? music.musicBass ?? 0);
-    tunnelHue = Number(state.tunnelHue ?? music.tunnelHue ?? 144);
-    tunnelPeople = Array.isArray(state.tunnelPeople)
-      ? state.tunnelPeople
-      : (context?.getTunnelPeople?.() || []);
+    visualHue = Number(state.visualHue ?? music.visualHue ?? 144);
+    visualPeople = Array.isArray(state.visualPeople)
+      ? state.visualPeople
+      : (context?.getVisualPeople?.() || []);
   }
 
-let superCubeMotion = {
+let orbitalCubeMotion = {
   currentX: 0,
   targetX: 0,
   currentY: 0,
@@ -61,56 +143,58 @@ let superCubeMotion = {
 
 function chooseNextSuperCubePosition(now = performance.now()) {
   const nearCenter = Math.random() < 0.28;
-  superCubeMotion.targetX = nearCenter
+  orbitalCubeMotion.targetX = nearCenter
     ? randomBetween(-28, 28)
     : randomBetween(-130, 130);
-  superCubeMotion.targetY = randomBetween(-28, 38);
-  superCubeMotion.nextDecisionAt = now + randomBetween(2800, 6200);
+  orbitalCubeMotion.targetY = randomBetween(-28, 38);
+  orbitalCubeMotion.nextDecisionAt = now + randomBetween(2800, 6200);
 }
 
 function updateSuperCubeMotion(now) {
-  const layer = document.getElementById("superCubeLayer");
+  const layer =
+    orbitalCubeLayer ||
+    document.getElementById("orbitalSuperCubeLayer");
   if (!layer || layer.hidden) {
-    superCubeMotion.lastFrameAt = now;
+    orbitalCubeMotion.lastFrameAt = now;
     return;
   }
 
-  if (!superCubeMotion.nextDecisionAt || now >= superCubeMotion.nextDecisionAt) {
+  if (!orbitalCubeMotion.nextDecisionAt || now >= orbitalCubeMotion.nextDecisionAt) {
     chooseNextSuperCubePosition(now);
   }
 
-  if (!superCubeMotion.lastFrameAt) superCubeMotion.lastFrameAt = now;
+  if (!orbitalCubeMotion.lastFrameAt) orbitalCubeMotion.lastFrameAt = now;
 
   const dt = Math.min(
     0.08,
-    Math.max(0.001, (now - superCubeMotion.lastFrameAt) / 1000)
+    Math.max(0.001, (now - orbitalCubeMotion.lastFrameAt) / 1000)
   );
-  superCubeMotion.lastFrameAt = now;
+  orbitalCubeMotion.lastFrameAt = now;
 
   const smoothing = 1 - Math.exp(-dt * 1.05);
-  superCubeMotion.currentX +=
-    (superCubeMotion.targetX - superCubeMotion.currentX) * smoothing;
-  superCubeMotion.currentY +=
-    (superCubeMotion.targetY - superCubeMotion.currentY) * smoothing;
+  orbitalCubeMotion.currentX +=
+    (orbitalCubeMotion.targetX - orbitalCubeMotion.currentX) * smoothing;
+  orbitalCubeMotion.currentY +=
+    (orbitalCubeMotion.targetY - orbitalCubeMotion.currentY) * smoothing;
 
   const t = now * 0.001;
   const bob =
-    Math.sin(t * 1.18 + superCubeMotion.phase) * 5.5 +
-    Math.sin(t * 0.47 + superCubeMotion.phase * 0.6) * 2.5;
+    Math.sin(t * 1.18 + orbitalCubeMotion.phase) * 5.5 +
+    Math.sin(t * 0.47 + orbitalCubeMotion.phase * 0.6) * 2.5;
 
   layer.style.setProperty(
-    "--super-cube-x",
-    `${superCubeMotion.currentX.toFixed(2)}px`
+    "--orbital-cube-x",
+    `${orbitalCubeMotion.currentX.toFixed(2)}px`
   );
   layer.style.setProperty(
-    "--super-cube-y",
-    `${(superCubeMotion.currentY + bob).toFixed(2)}px`
+    "--orbital-cube-y",
+    `${(orbitalCubeMotion.currentY + bob).toFixed(2)}px`
   );
 }
 
 const distantFloorSnapshot = document.createElement("canvas");
-distantFloorSnapshot.width = TUNNEL_W;
-distantFloorSnapshot.height = TUNNEL_H;
+distantFloorSnapshot.width = LAYOUT_W;
+distantFloorSnapshot.height = LAYOUT_H;
 const distantFloorSnapshotCtx = distantFloorSnapshot.getContext("2d", { alpha: true });
 
 function drawRepeatedDistantLayer(canvas, ctx, snapshot, snapshotCtx, zoom) {
@@ -156,20 +240,20 @@ function drawRepeatedDistantLayer(canvas, ctx, snapshot, snapshotCtx, zoom) {
 
 
 function applyDistantSceneryPerspective() {
-  if (!isTunnelMode()) return;
+  if (!isLayoutVisualMode()) return;
 
   const zoom = Number(liveCamera.currentZoom || 1);
   if (zoom >= 0.999) return;
 
   if (
-    tunnelFloorCanvas &&
-    tunnelFloorCtx &&
+    layoutOverlayCanvas &&
+    layoutOverlayCtx &&
     distantFloorSnapshot &&
     distantFloorSnapshotCtx
   ) {
     drawRepeatedDistantLayer(
-      tunnelFloorCanvas,
-      tunnelFloorCtx,
+      layoutOverlayCanvas,
+      layoutOverlayCtx,
       distantFloorSnapshot,
       distantFloorSnapshotCtx,
       zoom
@@ -221,20 +305,20 @@ function socialCubeProfile(item) {
 
 function createSocialCubeTile(item) {
   const tile = document.createElement("div");
-  tile.className = "super-cube-tile";
+  tile.className = "orbital-cube-tile";
 
   const profile = socialCubeProfile(item);
 
   if (profile) {
     const img = document.createElement("img");
-    img.className = "super-cube-tile-image";
+    img.className = "orbital-cube-tile-image";
     img.alt = "";
     img.decoding = "async";
     img.src = mediaImageUrl(profile);
     tile.appendChild(img);
   } else {
     const fallback = document.createElement("span");
-    fallback.className = "super-cube-tile-fallback";
+    fallback.className = "orbital-cube-tile-fallback";
     fallback.textContent = socialCubeInitials(item);
     tile.appendChild(fallback);
   }
@@ -244,10 +328,10 @@ function createSocialCubeTile(item) {
 
 function fillSocialCubeFace(face, items) {
   face.replaceChildren();
-  face.classList.remove("super-cube-face-leader");
+  face.classList.remove("orbital-cube-face-leader");
 
   const grid = document.createElement("div");
-  grid.className = "super-cube-grid";
+  grid.className = "orbital-cube-grid";
 
   for (let i = 0; i < 36; i += 1) {
     const item = items[i];
@@ -256,7 +340,7 @@ function fillSocialCubeFace(face, items) {
       grid.appendChild(createSocialCubeTile(item));
     } else {
       const empty = document.createElement("div");
-      empty.className = "super-cube-tile super-cube-tile-empty";
+      empty.className = "orbital-cube-tile orbital-cube-tile-empty";
       grid.appendChild(empty);
     }
   }
@@ -266,29 +350,29 @@ function fillSocialCubeFace(face, items) {
 
 function fillSocialCubeLeaderFace(face, leader) {
   face.replaceChildren();
-  face.classList.add("super-cube-face-leader");
+  face.classList.add("orbital-cube-face-leader");
 
   const wrap = document.createElement("div");
-  wrap.className = "super-cube-leader";
+  wrap.className = "orbital-cube-leader";
 
   const profile = socialCubeProfile(leader);
 
   if (profile) {
     const img = document.createElement("img");
-    img.className = "super-cube-leader-image";
+    img.className = "orbital-cube-leader-image";
     img.alt = "";
     img.decoding = "async";
     img.src = mediaImageUrl(profile);
     wrap.appendChild(img);
   } else {
     const fallback = document.createElement("span");
-    fallback.className = "super-cube-leader-fallback";
+    fallback.className = "orbital-cube-leader-fallback";
     fallback.textContent = socialCubeInitials(leader);
     wrap.appendChild(fallback);
   }
 
   const badge = document.createElement("div");
-  badge.className = "super-cube-leader-badge";
+  badge.className = "orbital-cube-leader-badge";
 
   const strong = document.createElement("strong");
   strong.textContent = String(
@@ -312,10 +396,11 @@ function fillSocialCubeLeaderFace(face, leader) {
 function syncSocialGiftCube(
   board,
   style = "",
-  fallbackLeader = null
+  fallbackLeader = null,
+  context = {}
 ) {
-  const layer = document.getElementById("superCubeLayer");
-  const cube = document.getElementById("superCube");
+  const layer = ensureSuperCubeLayer(context);
+  const cube = layer.querySelector("#orbitalSuperCube");
 
   if (!layer || !cube) {
     console.warn("social gift cube: HTML ausente");
@@ -340,7 +425,7 @@ function syncSocialGiftCube(
     new URLSearchParams(window.location.search)
       .get("preview") === "1";
 
-  if (!isTunnelMode() || (!effective.length && !previewMode)) {
+  if (!isLayoutVisualMode() || (!effective.length && !previewMode)) {
     layer.hidden = true;
     socialGiftCubeSignature = "";
     return;
@@ -360,7 +445,7 @@ function syncSocialGiftCube(
   layer.hidden = false;
 
   const faces = Array.from(
-    cube.querySelectorAll(".super-cube-face")
+    cube.querySelectorAll(".orbital-cube-face")
   );
 
   if (faces.length !== 6) {
@@ -395,8 +480,8 @@ function syncSocialGiftCube(
     }
   }
 
-  const name = document.getElementById("superCubeName");
-  const score = document.getElementById("superCubeScore");
+  const name = document.getElementById("orbitalSuperCubeName");
+  const score = document.getElementById("orbitalSuperCubeScore");
 
   if (name) {
     name.textContent = String(
@@ -415,7 +500,7 @@ function syncSocialGiftCube(
   }
 }
 
-function superCubeInitials(item) {
+function orbitalCubeInitials(item) {
   const label = String(
     item?.display_name ||
     item?.displayName ||
@@ -437,7 +522,7 @@ function superCubeInitials(item) {
 }
 
 
-function superCubeProfileUrl(item) {
+function orbitalCubeProfileUrl(item) {
   return String(
     item?.profile_image ||
     item?.avatar_url ||
@@ -448,7 +533,7 @@ function superCubeProfileUrl(item) {
 
 function createSuperCubeCell(item, { leader = false, empty = false } = {}) {
   const cell = document.createElement("div");
-  cell.className = "super-cube-cell";
+  cell.className = "orbital-cube-cell";
   if (leader) cell.classList.add("is-leader");
   if (empty) {
     cell.classList.add("is-empty");
@@ -467,18 +552,18 @@ function createSuperCubeCell(item, { leader = false, empty = false } = {}) {
     Math.round(Number(item?.total_count || item?.count || 0))
   );
 
-  const profile = superCubeProfileUrl(item);
+  const profile = orbitalCubeProfileUrl(item);
   if (profile) {
     const img = document.createElement("img");
-    img.className = "super-cube-cell-image";
+    img.className = "orbital-cube-cell-image";
     img.alt = "";
     img.decoding = "async";
     img.src = mediaImageUrl(profile);
     cell.appendChild(img);
   } else {
     const fallback = document.createElement("span");
-    fallback.className = "super-cube-cell-fallback";
-    fallback.textContent = superCubeInitials(item);
+    fallback.className = "orbital-cube-cell-fallback";
+    fallback.textContent = orbitalCubeInitials(item);
     cell.appendChild(fallback);
   }
 
@@ -486,7 +571,7 @@ function createSuperCubeCell(item, { leader = false, empty = false } = {}) {
 
   if (leader) {
     const badge = document.createElement("span");
-    badge.className = "super-cube-leader-badge";
+    badge.className = "orbital-cube-leader-badge";
     badge.textContent = total > 0 ? `${total}` : "TOP";
     cell.appendChild(badge);
   }
@@ -498,10 +583,10 @@ function renderSuperCubeFace(face, people, leader = null) {
   if (!face) return;
 
   const grid =
-    face.querySelector(".super-cube-face-grid") ||
+    face.querySelector(".orbital-cube-face-grid") ||
     (() => {
       const node = document.createElement("div");
-      node.className = "super-cube-face-grid";
+      node.className = "orbital-cube-face-grid";
       face.replaceChildren(node);
       return node;
     })();
@@ -528,7 +613,10 @@ function renderSuperCubeFace(face, people, leader = null) {
 }
 
 function syncSuperCube(board, style = "") {
-  const layer = document.getElementById("superCubeLayer");
+  const layer =
+    orbitalCubeLayer ||
+    document.getElementById("orbitalSuperCubeLayer");
+
   if (!layer) return;
 
   const cleanStyle = String(style || "").trim();
@@ -571,12 +659,12 @@ function syncSuperCube(board, style = "") {
   const others = ranking.slice(1, 181);
 
   const faces = [
-    layer.querySelector(".super-cube-front"),
-    layer.querySelector(".super-cube-back"),
-    layer.querySelector(".super-cube-right"),
-    layer.querySelector(".super-cube-left"),
-    layer.querySelector(".super-cube-top"),
-    layer.querySelector(".super-cube-bottom"),
+    layer.querySelector(".orbital-cube-front"),
+    layer.querySelector(".orbital-cube-back"),
+    layer.querySelector(".orbital-cube-right"),
+    layer.querySelector(".orbital-cube-left"),
+    layer.querySelector(".orbital-cube-top"),
+    layer.querySelector(".orbital-cube-bottom"),
   ];
 
   renderSuperCubeFace(faces[0], [], leader);
@@ -590,8 +678,8 @@ function syncSuperCube(board, style = "") {
     );
   }
 
-  const name = document.getElementById("superCubeName");
-  const score = document.getElementById("superCubeScore");
+  const name = document.getElementById("orbitalSuperCubeName");
+  const score = document.getElementById("orbitalSuperCubeScore");
 
   const label = String(
     leader?.display_name ||
@@ -665,7 +753,7 @@ function drawCornerSaber(ctx, outer, center, hue, power, time, phase) {
   ctx.restore();
 }
 
-function tunnelRingPoint(anchor, center, scale, wobble) {
+function visualRingPoint(anchor, center, scale, wobble) {
   return {
     x: center.x + (anchor.x - center.x) * scale + wobble.x,
     y: center.y + (anchor.y - center.y) * scale + wobble.y,
@@ -683,9 +771,9 @@ function rotateAround(point, center, angle) {
   };
 }
 
-function drawTunnelRing(ctx, anchors, center, scale, hue, alpha, width, time, index) {
+function drawActiveLayoutRing(ctx, anchors, center, scale, hue, alpha, width, time, index) {
   const wobbleAmp = 0.8 + scale * 1.25;
-  const points = anchors.map((anchor, pos) => tunnelRingPoint(anchor, center, scale, {
+  const points = anchors.map((anchor, pos) => visualRingPoint(anchor, center, scale, {
     x: Math.sin(time * 1.3 + index * 0.7 + pos * 1.9) * wobbleAmp,
     y: Math.cos(time * 1.1 + index * 0.8 + pos * 1.6) * wobbleAmp,
   }));
@@ -748,8 +836,8 @@ function distanceToNearestCornerPhase(t) {
   );
 }
 
-function drawTunnelDepthLines(ctx, center, hue, power, time, wallOrbit) {
-  const outer = { left: -20, top: -20, right: TUNNEL_W + 20, bottom: TUNNEL_H + 20 };
+function drawActiveLayoutDepthLines(ctx, center, hue, power, time, wallOrbit) {
+  const outer = { left: -20, top: -20, right: LAYOUT_W + 20, bottom: LAYOUT_H + 20 };
   const innerW = 34 + power * 20;
   const innerH = 56 + power * 28;
   const inner = {
@@ -759,7 +847,7 @@ function drawTunnelDepthLines(ctx, center, hue, power, time, wallOrbit) {
     bottom: center.y + innerH,
   };
   const count = 38;
-  const maxPhotoSlots = Math.min(10, tunnelPeople.length);
+  const maxPhotoSlots = Math.min(10, visualPeople.length);
   const photoEvery = maxPhotoSlots ? Math.max(1, Math.floor(count / maxPhotoSlots)) : 0;
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
@@ -784,11 +872,11 @@ function drawTunnelDepthLines(ctx, center, hue, power, time, wallOrbit) {
     const sparkX = start.x + (end.x - start.x) * travel;
     const sparkY = start.y + (end.y - start.y) * travel;
     const personSlot = photoEvery && i % photoEvery === 0;
-    const person = personSlot ? tunnelPeople[Math.floor(i / photoEvery) % tunnelPeople.length] : null;
+    const person = personSlot ? visualPeople[Math.floor(i / photoEvery) % visualPeople.length] : null;
     const perspective = 1 - travel;
     const photoRadius = (person?.weight > 1 ? 8.5 : 7.2) + perspective * 12 + power * 2.8;
     const photoAlpha = 0.28 + perspective * 0.45 + power * 0.18;
-    if (!person || !drawTunnelProfile(ctx, person, sparkX, sparkY, photoRadius, localHue + 24, photoAlpha)) {
+    if (!person || !drawVisualProfile(ctx, person, sparkX, sparkY, photoRadius, localHue + 24, photoAlpha)) {
       ctx.fillStyle = `hsla(${localHue + 24}, 100%, 78%, ${0.16 + power * 0.2})`;
       ctx.beginPath();
       ctx.arc(sparkX, sparkY, 1.8 + power * 2.4, 0, Math.PI * 2);
@@ -798,11 +886,11 @@ function drawTunnelDepthLines(ctx, center, hue, power, time, wallOrbit) {
   ctx.restore();
 }
 function drawOrbitalFloorOverlay(timeMs = performance.now()) {
-  if (!tunnelFloorCtx || !tunnelFloorCanvas) return;
+  if (!layoutOverlayCtx || !layoutOverlayCanvas) return;
 
-  const ctx = tunnelFloorCtx;
-  const w = TUNNEL_W;
-  const h = TUNNEL_H;
+  const ctx = layoutOverlayCtx;
+  const w = LAYOUT_W;
+  const h = LAYOUT_H;
   const time = Number(timeMs || 0) * 0.001;
   const energy = Math.max(0, Math.min(1, Number(musicEnergy || 0)));
   const bass = Math.max(0, Math.min(1, Number(musicBass || 0)));
@@ -835,7 +923,7 @@ function drawOrbitalFloorOverlay(timeMs = performance.now()) {
   ctx.closePath();
   ctx.fill();
 
-  const people = Array.isArray(tunnelPeople) ? tunnelPeople : [];
+  const people = Array.isArray(visualPeople) ? visualPeople : [];
   const giftPeople = people
     .filter(person =>
       Number(person?.weight || 1) > 1 &&
@@ -867,7 +955,7 @@ function drawOrbitalFloorOverlay(timeMs = performance.now()) {
   }
 
   function drawPersonTile(person, x00, y0, x01, x11, y1, x10, hue) {
-    const entry = tunnelImageEntry(person?.profile);
+    const entry = visualImageEntry(person?.profile);
     if (!entry) return false;
 
     const img = entry.img;
@@ -995,7 +1083,7 @@ function drawOrbitalFloorOverlay(timeMs = performance.now()) {
       const x11 = cx - half1 + half1 * 2 * u1;
 
       const seed = row * 47 + col * 83 + beatStep * 29;
-      const hue = (seed * 17 + tunnelHue + bass * 64) % 360;
+      const hue = (seed * 17 + visualHue + bass * 64) % 360;
       const light =
         27 +
         energy * 24 +
@@ -1032,7 +1120,7 @@ function drawOrbitalFloorOverlay(timeMs = performance.now()) {
   const reflection = ctx.createLinearGradient(0, floorHorizonY, 0, h);
   reflection.addColorStop(
     0,
-    `hsla(${195 + tunnelHue * 0.08},100%,58%,${0.08 + energy * 0.04})`
+    `hsla(${195 + visualHue * 0.08},100%,58%,${0.08 + energy * 0.04})`
   );
   reflection.addColorStop(0.22, "rgba(0,0,0,0)");
   reflection.addColorStop(1, "rgba(0,0,0,.18)");
@@ -1043,11 +1131,11 @@ function drawOrbitalFloorOverlay(timeMs = performance.now()) {
 }
 
 function drawOrbitalCathedral(timeMs = performance.now()) {
-  if (!tunnelCtx || !tunnelCanvas) return;
+  if (!layoutCtx || !layoutCanvas) return;
 
-  const ctx = tunnelCtx;
-  const w = TUNNEL_W;
-  const h = TUNNEL_H;
+  const ctx = layoutCtx;
+  const w = LAYOUT_W;
+  const h = LAYOUT_H;
   const time = Number(timeMs || 0) * 0.001;
   const energy = Math.max(0, Math.min(1, Number(musicEnergy || 0)));
   const bass = Math.max(0, Math.min(1, Number(musicBass || 0)));
@@ -1090,7 +1178,7 @@ function drawOrbitalCathedral(timeMs = performance.now()) {
     const radius = Math.max(w * spot.rx, h * spot.ry);
     const hue = (
       spot.hue +
-      tunnelHue * 0.16 +
+      visualHue * 0.16 +
       Math.sin(time * 0.10 + spot.phase) * 28
     ) % 360;
 
@@ -1120,7 +1208,7 @@ function drawOrbitalCathedral(timeMs = performance.now()) {
     const y = h * (0.12 + band * 0.085) + Math.cos(phase * 0.78) * 22;
     const rx = w * (0.28 + band * 0.015);
     const ry = 34 + band * 7 + energy * 18;
-    const hue = (190 + band * 31 + tunnelHue * 0.10) % 360;
+    const hue = (190 + band * 31 + visualHue * 0.10) % 360;
 
     ctx.save();
     ctx.translate(x, y);
@@ -1186,7 +1274,7 @@ function drawOrbitalCathedral(timeMs = performance.now()) {
         ringFlow * 36 +
         seg * (360 / ringSegments) +
         ring * 20 +
-        tunnelHue * 0.16
+        visualHue * 0.16
       ) % 360;
 
       ctx.strokeStyle = `hsla(${hue},100%,67%,${alpha})`;
@@ -1216,7 +1304,7 @@ function drawOrbitalCathedral(timeMs = performance.now()) {
   );
   vanishingHalo.addColorStop(
     0.22,
-    `hsla(${195 + tunnelHue * 0.08},100%,64%,${0.16 + energy * 0.12})`
+    `hsla(${195 + visualHue * 0.08},100%,64%,${0.16 + energy * 0.12})`
   );
   vanishingHalo.addColorStop(1, "rgba(0,0,0,0)");
   ctx.fillStyle = vanishingHalo;
@@ -1306,7 +1394,7 @@ const laneCount = 24;
     ctx.fill();
   }
 
-  const people = Array.isArray(tunnelPeople) ? tunnelPeople : [];
+  const people = Array.isArray(visualPeople) ? visualPeople : [];
   const peopleCount = Math.min(10, people.length);
 
   for (let i = 0; i < peopleCount; i += 1) {
@@ -1344,7 +1432,7 @@ const laneCount = 24;
     const hue =
       (ringFlow * 46 + i * 49 + 155) % 360;
 
-    if (!drawTunnelProfile(
+    if (!drawVisualProfile(
       ctx, person, px, py, radius, hue, alpha
     )) {
       ctx.fillStyle = `hsla(${hue},100%,77%,${alpha})`;
@@ -1504,7 +1592,7 @@ ctx.globalCompositeOperation = "source-over";
 
       const seed = row * 47 + col * 83 + beatStep * 29;
       const hue =
-        (seed * 17 + tunnelHue + bass * 64) % 360;
+        (seed * 17 + visualHue + bass * 64) % 360;
 
       const light =
         27 +
@@ -1550,7 +1638,7 @@ ctx.globalCompositeOperation = "source-over";
   );
   reflection.addColorStop(
     0,
-    `hsla(${195 + tunnelHue * 0.08},100%,58%,${0.10 + energy * 0.05})`
+    `hsla(${195 + visualHue * 0.08},100%,58%,${0.10 + energy * 0.05})`
   );
   reflection.addColorStop(0.20, "rgba(0,0,0,0)");
   reflection.addColorStop(0.72, "rgba(0,0,0,0)");
@@ -1584,6 +1672,7 @@ ctx.globalCompositeOperation = "source-over";
       }
 
       syncContext(context);
+      ensureSuperCubeLayer(context);
     },
 
     update(now, state, context) {
@@ -1617,7 +1706,8 @@ ctx.globalCompositeOperation = "source-over";
       syncSocialGiftCube(
         board,
         "orbital_cathedral",
-        leader
+        leader,
+        context
       );
 
       syncSuperCube(
@@ -1633,9 +1723,10 @@ ctx.globalCompositeOperation = "source-over";
     },
 
     destroy(context) {
-      context?.clearTunnelFloorOverlay?.();
+      context?.clearLayoutOverlay?.();
       syncSocialGiftCube([], "", null);
       syncSuperCube([], "");
+      destroySuperCubeLayer();
     },
   });
 })();

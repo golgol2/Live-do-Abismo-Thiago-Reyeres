@@ -100,7 +100,7 @@ Funcoes:
 
 ### `classic.js`
 
-Layout classico do tunel.
+Layout visual classico.
 
 Deve conter apenas o que pertence ao visual classico.
 
@@ -162,7 +162,6 @@ Cada layout precisa de uma entrada no `LAYOUT_CATALOG`:
     "name": "Meu Layout",
     "description": "Descricao do layout.",
     "enabled_by_default": True,
-    "legacy_tunnel_style": "meu_layout",
     "backend_module": "meu_layout",
     "backend_route": "/api/layouts/meu_layout",
     "frontend_module": "/static/js/layouts/meu_layout.js",
@@ -176,7 +175,6 @@ Campos:
 - `name`: nome exibido no painel.
 - `description`: explicacao curta.
 - `enabled_by_default`: se entra habilitado por padrao na rotacao.
-- `legacy_tunnel_style`: compatibilidade com estado antigo.
 - `backend_module`: modulo Python opcional em `routes/layouts`.
 - `backend_route`: rota publica opcional do layout.
 - `frontend_module`: arquivo JS que sera carregado quando o layout estiver ativo.
@@ -224,7 +222,7 @@ Todo layout JS deve ser um modulo isolado:
     onState(payload, context) {},
 
     destroy(context) {
-      context.clearTunnelFloorOverlay?.();
+      context.clearLayoutOverlay?.();
     },
   });
 })();
@@ -238,25 +236,25 @@ Principais campos:
 
 - `stage`: elemento principal da cena.
 - `cameraLayer`: camada de camera.
-- `tunnelCanvas`: canvas principal do tunel.
-- `tunnelFloorCanvas`: canvas de piso/sobreposicao.
-- `tunnelCtx`: contexto 2D do canvas principal.
-- `tunnelFloorCtx`: contexto 2D do piso.
+- `layoutCanvas`: canvas principal do layout.
+- `layoutOverlayCanvas`: canvas de piso/sobreposicao.
+- `layoutCtx`: contexto 2D do canvas principal.
+- `layoutOverlayCtx`: contexto 2D do piso.
 - `skyLayer`: camada de ceu/fundo HTML.
 - `world`: camada do mundo/personagem.
 - `actorLayer`: camada do personagem.
 - `mapBack`: objetos atras do personagem.
 - `mapFront`: objetos na frente do personagem.
-- `tunnelWidth`: largura interna do canvas.
-- `tunnelHeight`: altura interna do canvas.
-- `clearTunnelFloorOverlay`: limpa o canvas de piso.
-- `drawTunnelProfile`: desenha foto/avatar circular de usuario.
+- `layoutWidth`: largura interna do canvas.
+- `layoutHeight`: altura interna do canvas.
+- `clearLayoutOverlay`: limpa o canvas de piso.
+- `drawVisualProfile`: desenha foto/avatar circular de usuario.
 - `mediaImageUrl`: converte caminho de imagem em URL carregavel.
-- `tunnelImageEntry`: acessa imagem pre-carregada de usuario.
-- `isTunnelMode`: informa se o renderer esta em modo tunel.
+- `visualImageEntry`: acessa imagem pre-carregada de usuario.
+- `isLayoutVisualMode`: informa se o renderer esta em modo de layout.
 - `getActiveLayout`: retorna o layout ativo.
-- `getVisualMode`: retorna `tunnel` ou `map`.
-- `getTunnelPeople`: retorna usuarios recentes da live.
+- `getVisualMode`: retorna `layout` ou `map`.
+- `getVisualPeople`: retorna usuarios recentes da live.
 - `getMusicState`: retorna energia, grave e hue da musica.
 - `getCameraState`: retorna estado comum da camera.
 
@@ -278,8 +276,8 @@ O metodo `render(now, state, context)` recebe:
 - `now`: timestamp do frame.
 - `state.musicEnergy`: energia atual da musica.
 - `state.musicBass`: grave atual da musica.
-- `state.tunnelHue`: cor/hue animada comum.
-- `state.tunnelPeople`: usuarios recentes para efeitos visuais.
+- `state.visualHue`: cor/hue animada comum.
+- `state.visualPeople`: usuarios recentes para efeitos visuais.
 - `state.visualMode`: modo visual atual.
 - `state.activeLayout`: layout ativo.
 

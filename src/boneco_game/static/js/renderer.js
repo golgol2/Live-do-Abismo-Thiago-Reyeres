@@ -15,17 +15,17 @@ const SPEECH_STUCK_TIMEOUT_MS = 18000;
 const MUSIC_IDLE_VOLUME = 0.16;
 const MUSIC_SPEECH_VOLUME = 0.055;
 const MUSIC_REACTION_VOLUME = 0.006;
-const TUNNEL_W = 360;
-const TUNNEL_H = 640;
+const LAYOUT_W = 360;
+const LAYOUT_H = 640;
 const BELLY_PROFILE_BASE_SIZE = 92;
-const RENDERER_ASSET_VERSION = "90";
+const RENDERER_ASSET_VERSION = "94";
 
 const stage = document.getElementById("stage");
 const cameraLayer = document.getElementById("cameraLayer");
-const tunnelCanvas = document.getElementById("tunnelCanvas");
-const tunnelFloorCanvas = document.getElementById("tunnelFloorCanvas");
-const tunnelCtx = tunnelCanvas ? tunnelCanvas.getContext("2d", { alpha: false }) : null;
-const tunnelFloorCtx = tunnelFloorCanvas ? tunnelFloorCanvas.getContext("2d", { alpha: true }) : null;
+const layoutCanvas = document.getElementById("layoutCanvas");
+const layoutOverlayCanvas = document.getElementById("layoutOverlayCanvas");
+const layoutCtx = layoutCanvas ? layoutCanvas.getContext("2d", { alpha: false }) : null;
+const layoutOverlayCtx = layoutOverlayCanvas ? layoutOverlayCanvas.getContext("2d", { alpha: true }) : null;
 const skyLayer = document.getElementById("skyLayer");
 const world = document.getElementById("world");
 const actorLayer = document.getElementById("actorLayer");
@@ -98,14 +98,13 @@ let standbyVideo = videoB;
 let currentVideo = "";
 let currentScene = "";
 let currentMap = null;
-let visualMode = "tunnel";
-let tunnelStyle = "classic";
+let visualMode = "layout";
 let activeLayout = "classic";
 let mapSignature = "";
 let mapRuntimeKey = "";
 let skyRuntimeKey = "";
 let lastGameLoopAt = 0;
-let lastTunnelDrawAt = 0;
+let lastLayoutDrawAt = 0;
 let mapEntries = [];
 let musicTracks = [];
 let manualMusicTracks = [];
@@ -118,10 +117,10 @@ let musicAnalyser = null;
 let musicFreqData = null;
 let musicEnergy = 0;
 let musicBass = 0;
-let tunnelHue = 144;
-let tunnelPeople = [];
-let tunnelPeopleSignature = "";
-const tunnelImageCache = new Map();
+let visualHue = 144;
+let visualPeople = [];
+let visualPeopleSignature = "";
+const visualImageCache = new Map();
 let mediaState = {
   idle: [],
   manual_idle: [],
@@ -255,7 +254,7 @@ function mediaImageUrl(path) {
 }
 
 
-function syncTunnelPeople(people) {
+function syncVisualPeople(people) {
   const seen = new Set();
   const next = [];
   for (const item of Array.isArray(people) ? people : []) {
@@ -276,15 +275,15 @@ function syncTunnelPeople(people) {
     if (next.length >= 18) break;
   }
   const signature = next.map((item) => `${item.key}:${item.profile}`).join("|");
-  if (signature === tunnelPeopleSignature) return;
-  tunnelPeopleSignature = signature;
-  tunnelPeople = next;
-  for (const person of tunnelPeople) preloadTunnelImage(person.profile);
+  if (signature === visualPeopleSignature) return;
+  visualPeopleSignature = signature;
+  visualPeople = next;
+  for (const person of visualPeople) preloadVisualImage(person.profile);
 }
 
-function preloadTunnelImage(path) {
+function preloadVisualImage(path) {
   const url = mediaImageUrl(path);
-  if (!url || tunnelImageCache.has(url)) return null;
+  if (!url || visualImageCache.has(url)) return null;
   const img = new Image();
   const entry = { img, loaded: false, failed: false };
   img.onload = () => {
@@ -295,14 +294,14 @@ function preloadTunnelImage(path) {
   };
   img.decoding = "async";
   img.src = url;
-  tunnelImageCache.set(url, entry);
+  visualImageCache.set(url, entry);
   return entry;
 }
 
-function tunnelImageEntry(path) {
+function visualImageEntry(path) {
   const url = mediaImageUrl(path);
   if (!url) return null;
-  const entry = tunnelImageCache.get(url) || preloadTunnelImage(path);
+  const entry = visualImageCache.get(url) || preloadVisualImage(path);
   if (!entry || entry.failed) return null;
   if (entry.loaded || (entry.img.complete && entry.img.naturalWidth > 0)) {
     entry.loaded = true;
@@ -312,8 +311,8 @@ function tunnelImageEntry(path) {
 }
 
 
-function drawTunnelProfile(ctx, person, x, y, radius, hue, alpha) {
-  const entry = tunnelImageEntry(person.profile);
+function drawVisualProfile(ctx, person, x, y, radius, hue, alpha) {
+  const entry = visualImageEntry(person.profile);
   if (!entry) return false;
   const img = entry.img;
   const size = radius * 2;
@@ -370,7 +369,7 @@ function sameStringList(left, right) {
   return a.length === b.length && a.every((item, index) => item === b[index]);
 }
 
-function isTunnelMode() {
+function isLayoutVisualMode() {
   return visualMode !== "map";
 }
 
@@ -465,7 +464,7 @@ function resetDynamicLiveCamera() {
     cameraLayer.style.transform = "translate3d(0px,0px,0) scale(1)";
   }
   if (world) {
-    world.style.removeProperty("--tunnel-world-transform");
+    world.style.removeProperty("--layout-world-transform");
   }
   if (stage) {
     stage.dataset.cameraDistance = "normal";
@@ -473,14 +472,14 @@ function resetDynamicLiveCamera() {
 }
 
 function onSpeechCompletedForCamera() {
-  if (!isTunnelMode() || !liveCameraConfig.enabled || liveCameraConfig.manualShot !== "auto") return;
+  if (!isLayoutVisualMode() || !liveCameraConfig.enabled || liveCameraConfig.manualShot !== "auto") return;
   liveCamera.responsesLeft -= 1;
   if (liveCamera.responsesLeft <= 0) chooseNextCameraShot();
 }
 
 function updateDynamicLiveCamera(now) {
   if (!cameraLayer) return;
-  if (!isTunnelMode() || !liveCameraConfig.enabled) {
+  if (!isLayoutVisualMode() || !liveCameraConfig.enabled) {
     liveCamera.targetZoom = 1; liveCamera.targetX = 0; liveCamera.targetY = 0;
   } else {
     if (!liveCamera.initialized) resetDynamicLiveCamera();
@@ -500,15 +499,14 @@ function updateDynamicLiveCamera(now) {
   const cameraX = Number(liveCamera.currentX || 0);
   const cameraY = Number(liveCamera.currentY || 0);
 
-  if (isTunnelMode() && cameraZoom < 0.999) {
-    // DISTANTE = câmera recua dentro do mundo, não reduz a "tela".
-    // Túnel/plasma continua infinito; world, piso e paredes recuam juntos.
+  if (isLayoutVisualMode() && cameraZoom < 0.999) {
+    // DISTANTE = camera recua dentro do mundo, nao reduz a tela.
     cameraLayer.style.transform =
       "translate3d(0px, 0px, 0) scale(1)";
 
     if (world) {
       world.style.setProperty(
-        "--tunnel-world-transform",
+        "--layout-world-transform",
         `translate3d(${cameraX.toFixed(2)}px, ${(cameraY * 0.35).toFixed(2)}px, 0) scale(${cameraZoom.toFixed(5)})`
       );
     }
@@ -516,7 +514,7 @@ function updateDynamicLiveCamera(now) {
     stage.dataset.cameraDistance = "distant";
   } else {
     if (world) {
-      world.style.removeProperty("--tunnel-world-transform");
+      world.style.removeProperty("--layout-world-transform");
     }
 
     cameraLayer.style.transform =
@@ -527,15 +525,15 @@ function updateDynamicLiveCamera(now) {
 }
 
 
-function clearMapForTunnel() {
-  if (!mapEntries.length && mapSignature === "__tunnel__") return;
+function clearMapForLayout() {
+  if (!mapEntries.length && mapSignature === "__layout__") return;
   mapEntries = [];
-  mapSignature = "__tunnel__";
+  mapSignature = "__layout__";
   mapBack.replaceChildren();
   mapFront.replaceChildren();
 }
 
-function positionTunnelActor() {
+function positionLayoutActor() {
   if (world) world.style.transform = "none";
   actorLayer.style.setProperty("--actor-x", "0px");
   actorLayer.style.setProperty("--actor-y", "0px");
@@ -544,8 +542,8 @@ function positionTunnelActor() {
 
 function maintainLiveAvatarScene() {
   currentMap = null;
-  clearMapForTunnel();
-  positionTunnelActor();
+  clearMapForLayout();
+  positionLayoutActor();
 
   if (speechBusy || reactionBusy) return;
 
@@ -691,10 +689,10 @@ function updateMusicEnergy(nowSeconds) {
 }
 
 
-function clearTunnelFloorOverlay() {
-  if (!tunnelFloorCtx || !tunnelFloorCanvas) return;
-  tunnelFloorCtx.setTransform(1, 0, 0, 1, 0, 0);
-  tunnelFloorCtx.clearRect(0, 0, TUNNEL_W, TUNNEL_H);
+function clearLayoutOverlay() {
+  if (!layoutOverlayCtx || !layoutOverlayCanvas) return;
+  layoutOverlayCtx.setTransform(1, 0, 0, 1, 0, 0);
+  layoutOverlayCtx.clearRect(0, 0, LAYOUT_W, LAYOUT_H);
 }
 
 
@@ -713,16 +711,16 @@ function clearTunnelFloorOverlay() {
 
 
 
-function drawTunnel(now) {
-  lastTunnelDrawAt = performance.now();
-  if (!tunnelCtx) return;
+function drawActiveLayout(now) {
+  lastLayoutDrawAt = performance.now();
+  if (!layoutCtx) return;
 
   updateMusicVolume();
 
-  if (!isTunnelMode()) {
-    clearTunnelFloorOverlay();
+  if (!isLayoutVisualMode()) {
+    clearLayoutOverlay();
     requestAnimationFrame(
-      drawTunnel
+      drawActiveLayout
     );
     return;
   }
@@ -731,9 +729,9 @@ function drawTunnel(now) {
 
   updateMusicEnergy(time);
 
-  tunnelHue =
+  visualHue =
     (
-      tunnelHue
+      visualHue
       + 0.18
       + musicEnergy * 1.6
     ) % 360;
@@ -750,8 +748,8 @@ function drawTunnel(now) {
         {
           musicEnergy,
           musicBass,
-          tunnelHue,
-          tunnelPeople,
+          visualHue,
+          visualPeople,
           visualMode,
           activeLayout,
         }
@@ -765,9 +763,9 @@ function drawTunnel(now) {
   }
 
   if (!rendered) {
-    clearTunnelFloorOverlay();
+    clearLayoutOverlay();
 
-    tunnelCtx.setTransform(
+    layoutCtx.setTransform(
       1,
       0,
       0,
@@ -776,22 +774,22 @@ function drawTunnel(now) {
       0
     );
 
-    tunnelCtx.globalCompositeOperation =
+    layoutCtx.globalCompositeOperation =
       "source-over";
 
-    tunnelCtx.fillStyle =
+    layoutCtx.fillStyle =
       "#02030a";
 
-    tunnelCtx.fillRect(
+    layoutCtx.fillRect(
       0,
       0,
-      TUNNEL_W,
-      TUNNEL_H
+      LAYOUT_W,
+      LAYOUT_H
     );
   }
 
   requestAnimationFrame(
-    drawTunnel
+    drawActiveLayout
   );
 }
 
@@ -819,8 +817,8 @@ function gameLoop(now) {
       {
         musicEnergy,
         musicBass,
-        tunnelHue,
-        tunnelPeople,
+        visualHue,
+        visualPeople,
         visualMode,
         activeLayout,
       }
@@ -1079,29 +1077,29 @@ function rendererLayoutContext() {
   return {
     stage,
     cameraLayer,
-    tunnelCanvas,
-    tunnelFloorCanvas,
-    tunnelCtx,
-    tunnelFloorCtx,
+    layoutCanvas,
+    layoutOverlayCanvas,
+    layoutCtx,
+    layoutOverlayCtx,
     skyLayer,
     world,
     actorLayer,
     mapBack,
     mapFront,
-    tunnelWidth: TUNNEL_W,
-    tunnelHeight: TUNNEL_H,
-    clearTunnelFloorOverlay,
-    drawTunnelProfile,
+    layoutWidth: LAYOUT_W,
+    layoutHeight: LAYOUT_H,
+    clearLayoutOverlay,
+    drawVisualProfile,
     mediaImageUrl,
-    tunnelImageEntry,
-    isTunnelMode,
+    visualImageEntry,
+    isLayoutVisualMode,
     getActiveLayout: () => activeLayout,
     getVisualMode: () => visualMode,
-    getTunnelPeople: () => tunnelPeople,
+    getVisualPeople: () => visualPeople,
     getMusicState: () => ({
       musicEnergy,
       musicBass,
-      tunnelHue,
+      visualHue,
     }),
     getCameraState: () => ({
       currentZoom: liveCamera.currentZoom,
@@ -1304,7 +1302,6 @@ function resolveRendererLayout(payload) {
       : String(
           payload?.layout?.active_layout
           || payload?.state?.active_layout
-          || payload?.state?.tunnel_style
           || "classic"
         ).trim();
 
@@ -1326,10 +1323,6 @@ async function applyRendererLayout(payload) {
   const nextLayout = normalizeLayoutId(resolveRendererLayout(payload));
 
   activeLayout = nextLayout;
-
-  // Compatibilidade temporária da Fase 1:
-  // os desenhos ainda vivem no renderer.js.
-  tunnelStyle = nextLayout;
 
   stage.dataset.layout = nextLayout;
 
@@ -1497,7 +1490,7 @@ function refreshPreviewGiftVisuals() {
   notifyActiveLayoutState({
     gift_leaderboard: previewGiftLeaderboard,
     top_gifter: leader,
-    visual_people: tunnelPeople,
+    visual_people: visualPeople,
     state: {
       active_layout: activeLayout,
       visual_mode: visualMode,
@@ -1682,12 +1675,12 @@ async function pollState() {
     bellyProfileOffsetY = clampNumber(payload.state?.belly_profile_offset_y, -120, 120, 0);
     normalizeLiveCameraConfig(payload.state || {});
     await applyRendererLayout(payload);
-    visualMode = "tunnel";
+    visualMode = "layout";
     stage.dataset.visual = visualMode;
     stage.dataset.mode = String(urlMode || payload.state?.mode || "normal");
     syncMusicTracks(payload.music || []);
     syncManualMusicTracks(payload.manual_music || []);
-    syncTunnelPeople(payload.visual_people || []);
+    syncVisualPeople(payload.visual_people || []);
     const stateGiftLeaderboard =
       rendererPreviewMode
       && previewGiftLeaderboard.length
@@ -1713,11 +1706,11 @@ async function pollState() {
       ...payload,
       gift_leaderboard: stateGiftLeaderboard,
       top_gifter: stateTopGifter,
-      visual_people: tunnelPeople,
+      visual_people: visualPeople,
     });
     currentMap = null;
-    clearMapForTunnel();
-    positionTunnelActor();
+    clearMapForLayout();
+    positionLayoutActor();
     if (!currentVideo) await setScene("idle");
   } catch (err) {
     console.warn("state failed", err);
@@ -2588,9 +2581,9 @@ function rendererHeartbeat() {
       lastGameLoopAt
         ? Math.max(0, now - lastGameLoopAt)
         : 0,
-    tunnel_draw_age_ms:
-      lastTunnelDrawAt
-        ? Math.max(0, now - lastTunnelDrawAt)
+    layout_draw_age_ms:
+      lastLayoutDrawAt
+        ? Math.max(0, now - lastLayoutDrawAt)
         : 0,
     active_video_paused: Boolean(activeVideo?.paused),
     active_video_ended: Boolean(activeVideo?.ended),
@@ -2876,7 +2869,7 @@ stage.dataset.visual = visualMode;
 stage.dataset.layout = activeLayout;
 rendererHeartbeat();
 requestAnimationFrame(gameLoop);
-requestAnimationFrame(drawTunnel);
+requestAnimationFrame(drawActiveLayout);
 setInterval(pollState, 900);
 setInterval(pollSpeech, 350);
 setInterval(rendererHeartbeat, 2000);

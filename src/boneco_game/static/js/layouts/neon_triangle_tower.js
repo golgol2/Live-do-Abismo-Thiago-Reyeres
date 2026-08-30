@@ -33,18 +33,18 @@
   }));
 
   let stage = null;
-  let tunnelCanvas = null;
-  let tunnelFloorCanvas = null;
-  let tunnelCtx = null;
-  let tunnelFloorCtx = null;
+  let layoutCanvas = null;
+  let layoutOverlayCanvas = null;
+  let layoutCtx = null;
+  let layoutOverlayCtx = null;
   let mediaImageUrl = value => String(value || "");
-  let tunnelImageEntry = () => null;
-  let drawTunnelProfile = () => false;
-  let getTunnelPeople = () => [];
-  let isTunnelMode = () => true;
+  let visualImageEntry = () => null;
+  let drawVisualProfile = () => false;
+  let getVisualPeople = () => [];
+  let isLayoutVisualMode = () => true;
   let musicEnergy = 0;
   let musicBass = 0;
-  let tunnelHue = 190;
+  let visualHue = 190;
   let people = [];
   let peopleSignature = "";
   let peopleSlots = Array(TOWER_SLOT_COUNT).fill(null);
@@ -62,15 +62,15 @@
 
   function syncContext(context, state = {}) {
     stage = context?.stage || stage;
-    tunnelCanvas = context?.tunnelCanvas || tunnelCanvas;
-    tunnelFloorCanvas = context?.tunnelFloorCanvas || tunnelFloorCanvas;
-    tunnelCtx = context?.tunnelCtx || tunnelCtx;
-    tunnelFloorCtx = context?.tunnelFloorCtx || tunnelFloorCtx;
+    layoutCanvas = context?.layoutCanvas || layoutCanvas;
+    layoutOverlayCanvas = context?.layoutOverlayCanvas || layoutOverlayCanvas;
+    layoutCtx = context?.layoutCtx || layoutCtx;
+    layoutOverlayCtx = context?.layoutOverlayCtx || layoutOverlayCtx;
     mediaImageUrl = context?.mediaImageUrl || mediaImageUrl;
-    tunnelImageEntry = context?.tunnelImageEntry || tunnelImageEntry;
-    drawTunnelProfile = context?.drawTunnelProfile || drawTunnelProfile;
-    getTunnelPeople = context?.getTunnelPeople || getTunnelPeople;
-    isTunnelMode = context?.isTunnelMode || isTunnelMode;
+    visualImageEntry = context?.visualImageEntry || visualImageEntry;
+    drawVisualProfile = context?.drawVisualProfile || drawVisualProfile;
+    getVisualPeople = context?.getVisualPeople || getVisualPeople;
+    isLayoutVisualMode = context?.isLayoutVisualMode || isLayoutVisualMode;
 
     const music = context?.getMusicState?.() || {};
     musicEnergy = clamp(
@@ -83,8 +83,8 @@
       0,
       1
     );
-    tunnelHue = Number(
-      state.tunnelHue ?? music.tunnelHue ?? tunnelHue
+    visualHue = Number(
+      state.visualHue ?? music.visualHue ?? visualHue
     );
 
   }
@@ -325,11 +325,11 @@
     cube.classList.add("is-empty");
     cube.style.setProperty(
       "--cube-hue",
-      String((tunnelHue + index * 31) % 360)
+      String((visualHue + index * 31) % 360)
     );
     cube.style.setProperty(
       "--cube-edge-hue",
-      String((tunnelHue + index * 31) % 360)
+      String((visualHue + index * 31) % 360)
     );
 
     cube.appendChild(createFace("front"));
@@ -358,11 +358,11 @@
     cube.style.setProperty("--gift-power", giftPower.toFixed(4));
     cube.style.setProperty(
       "--cube-hue",
-      String((tunnelHue + giftPower * 160 + index * 24) % 360)
+      String((visualHue + giftPower * 160 + index * 24) % 360)
     );
     cube.style.setProperty(
       "--cube-edge-hue",
-      String((tunnelHue + giftPower * 160 + index * 24) % 360)
+      String((visualHue + giftPower * 160 + index * 24) % 360)
     );
 
     for (const face of cube.querySelectorAll(".neon-user-cube-face")) {
@@ -449,7 +449,7 @@
 
     for (const cube of towerCubes) {
       const index = Number(cube.dataset.index || 0);
-      const baseHue = Number(cube.style.getPropertyValue("--cube-hue") || tunnelHue);
+      const baseHue = Number(cube.style.getPropertyValue("--cube-hue") || visualHue);
       const edgeHue =
         (baseHue + towerBeat * 118 + Math.sin(time * (2.2 + musicBass * 3.2) + index * 0.72) * 34) % 360;
       cube.style.setProperty("--cube-edge-hue", edgeHue.toFixed(2));
@@ -576,13 +576,13 @@
   }
 
   function drawBackground(now) {
-    const ctx = tunnelCtx;
-    if (!ctx || !tunnelCanvas) return;
+    const ctx = layoutCtx;
+    if (!ctx || !layoutCanvas) return;
 
-    const width = tunnelCanvas.width || 360;
-    const height = tunnelCanvas.height || 640;
+    const width = layoutCanvas.width || 360;
+    const height = layoutCanvas.height || 640;
     const time = now * 0.001;
-    const hue = (tunnelHue + musicBass * 130) % 360;
+    const hue = (visualHue + musicBass * 130) % 360;
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, width, height);
@@ -709,12 +709,12 @@
 
     drawBeatMeters(ctx, width, height, time, hue);
 
-    const peopleForSky = people.length ? people : getTunnelPeople();
+    const peopleForSky = people.length ? people : getVisualPeople();
     for (let index = 0; index < Math.min(peopleForSky.length, 10); index += 1) {
       const person = peopleForSky[index];
       const x = 34 + (index % 5) * 72 + Math.sin(time + index) * 5;
       const y = 78 + Math.floor(index / 5) * 78 + Math.cos(time * 1.3 + index) * 6;
-      drawTunnelProfile(
+      drawVisualProfile(
         ctx,
         person,
         x,
@@ -797,8 +797,8 @@
   }
 
   function drawTriangleFloor(now) {
-    const ctx = tunnelFloorCtx;
-    const canvas = tunnelFloorCanvas;
+    const ctx = layoutOverlayCtx;
+    const canvas = layoutOverlayCanvas;
     if (!ctx || !canvas) return;
 
     const width = canvas.width || 360;
@@ -809,7 +809,7 @@
     const rows = 10;
     const cols = 10;
     const time = now * 0.001;
-    const hue = (tunnelHue + time * 70 + musicBass * 180) % 360;
+    const hue = (visualHue + time * 70 + musicBass * 180) % 360;
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, width, height);
@@ -979,8 +979,8 @@
     render(now, state, context) {
       syncContext(context, state);
 
-      if (!isTunnelMode()) {
-        context?.clearTunnelFloorOverlay?.();
+      if (!isLayoutVisualMode()) {
+        context?.clearLayoutOverlay?.();
         return false;
       }
 
@@ -995,7 +995,7 @@
     },
 
     destroy(context) {
-      context?.clearTunnelFloorOverlay?.();
+      context?.clearLayoutOverlay?.();
       if (towerLayer) {
         towerLayer.remove();
       }

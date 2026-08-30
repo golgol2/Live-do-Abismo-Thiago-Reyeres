@@ -10,11 +10,11 @@
     linear-gradient(180deg, #02040a 0%, #050711 48%, #000 100%);
 }
 
-#stage[data-layout="neon_triangle_tower"] #tunnelCanvas {
+#stage[data-layout="neon_triangle_tower"] #layoutCanvas {
   background: #010208;
 }
 
-#stage[data-layout="neon_triangle_tower"] #tunnelFloorCanvas {
+#stage[data-layout="neon_triangle_tower"] #layoutOverlayCanvas {
   z-index: 6;
 }
 

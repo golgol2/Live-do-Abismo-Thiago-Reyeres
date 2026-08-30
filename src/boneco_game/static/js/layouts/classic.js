@@ -171,7 +171,7 @@
     ctx.restore();
   }
 
-  function tunnelRingPoint(
+  function visualRingPoint(
     anchor,
     center,
     scale,
@@ -190,7 +190,7 @@
     };
   }
 
-  function drawTunnelRing(
+  function drawActiveLayoutRing(
     ctx,
     anchors,
     center,
@@ -206,7 +206,7 @@
 
     const points = anchors.map(
       (anchor, pos) =>
-        tunnelRingPoint(
+        visualRingPoint(
           anchor,
           center,
           scale,
@@ -286,7 +286,7 @@
     ctx.restore();
   }
 
-  function drawTunnelDepthLines(
+  function drawActiveLayoutDepthLines(
     ctx,
     center,
     hue,
@@ -498,7 +498,7 @@
     context
   ) {
     const ctx =
-      context?.tunnelCtx;
+      context?.layoutCtx;
 
     if (!ctx) {
       return false;
@@ -506,13 +506,13 @@
 
     const width =
       Number(
-        context?.tunnelWidth
+        context?.layoutWidth
         || 360
       );
 
     const height =
       Number(
-        context?.tunnelHeight
+        context?.layoutHeight
         || 640
       );
 
@@ -543,26 +543,26 @@
         )
       );
 
-    const tunnelHue =
+    const visualHue =
       Number(
-        state?.tunnelHue
+        state?.visualHue
         || 0
       );
 
     const people =
       Array.isArray(
-        state?.tunnelPeople
+        state?.visualPeople
       )
-        ? state.tunnelPeople
+        ? state.visualPeople
         : [];
 
     if (
       typeof context
-        ?.clearTunnelFloorOverlay
+        ?.clearLayoutOverlay
       === "function"
     ) {
       context
-        .clearTunnelFloorOverlay();
+        .clearLayoutOverlay();
     }
 
     ctx.setTransform(
@@ -618,7 +618,7 @@
           y: -14,
         },
         hue:
-          (tunnelHue + 312) % 360,
+          (visualHue + 312) % 360,
         phase: 0,
       },
       {
@@ -627,7 +627,7 @@
           y: -14,
         },
         hue:
-          (tunnelHue + 28) % 360,
+          (visualHue + 28) % 360,
         phase: 0.18,
       },
       {
@@ -636,7 +636,7 @@
           y: height + 14,
         },
         hue:
-          (tunnelHue + 90) % 360,
+          (visualHue + 90) % 360,
         phase: 0.36,
       },
       {
@@ -645,7 +645,7 @@
           y: height + 14,
         },
         hue:
-          (tunnelHue + 276) % 360,
+          (visualHue + 276) % 360,
         phase: 0.54,
       },
     ];
@@ -667,12 +667,12 @@
 
     bg.addColorStop(
       0,
-      `hsla(${(tunnelHue + 85) % 360}, 100%, 58%, .35)`
+      `hsla(${(visualHue + 85) % 360}, 100%, 58%, .35)`
     );
 
     bg.addColorStop(
       0.28,
-      `hsla(${(tunnelHue + 170) % 360}, 96%, 40%, .1)`
+      `hsla(${(visualHue + 170) % 360}, 96%, 40%, .1)`
     );
 
     bg.addColorStop(
@@ -709,10 +709,10 @@
       );
     }
 
-    drawTunnelDepthLines(
+    drawActiveLayoutDepthLines(
       ctx,
       center,
-      tunnelHue,
+      visualHue,
       pulse,
       time,
       wallOrbit,
@@ -722,7 +722,7 @@
         people,
         drawProfile:
           context
-            ?.drawTunnelProfile,
+            ?.drawVisualProfile,
       }
     );
 
@@ -751,12 +751,12 @@
 
       const hue =
         (
-          tunnelHue
+          visualHue
           + i * 10
           + bass * 150
         ) % 360;
 
-      drawTunnelRing(
+      drawActiveLayoutRing(
         ctx,
         cornerAnchors,
         center,
@@ -789,7 +789,7 @@
 
     floor.addColorStop(
       0.4,
-      `hsla(${(tunnelHue + 34) % 360}, 80%, 18%, .26)`
+      `hsla(${(visualHue + 34) % 360}, 80%, 18%, .26)`
     );
 
     floor.addColorStop(
@@ -819,7 +819,7 @@
           "classic";
       }
 
-      context?.clearTunnelFloorOverlay?.();
+      context?.clearLayoutOverlay?.();
       context?.legacy?.syncSocialGiftCube?.(
         [],
         "",

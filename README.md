@@ -786,3 +786,223 @@ docs/arquitetura.md
 ```
 
 para uma descrição mais profunda do fluxo interno, serviços e responsabilidades.
+
+---
+
+## Passo a passo para instalar em uma máquina nova
+
+As instruções abaixo consideram uma máquina Linux baseada em Ubuntu/Debian.
+Use Python 3.12 ou superior.
+
+### 1. Instalar pacotes do sistema
+
+```bash
+sudo apt update
+sudo apt install -y \
+  git curl xdg-utils \
+  python3 python3-venv python3-pip python3-dev python3-gi python3-gi-cairo \
+  nodejs npm \
+  tor torsocks \
+  pulseaudio-utils pavucontrol \
+  xserver-xephyr x11-utils \
+  gstreamer1.0-tools \
+  gstreamer1.0-plugins-base \
+  gstreamer1.0-plugins-good \
+  gstreamer1.0-plugins-bad \
+  gstreamer1.0-plugins-ugly \
+  gstreamer1.0-libav \
+  gir1.2-gstreamer-1.0 \
+  gir1.2-gst-plugins-base-1.0
+```
+
+Instale também Google Chrome ou Chromium. O renderer procura automaticamente por:
+
+```text
+google-chrome
+google-chrome-stable
+chromium
+chromium-browser
+brave-browser
+```
+
+Se o Chrome estiver em outro caminho, informe:
+
+```bash
+export BONECO_GAME_CHROME_BIN=/caminho/do/chrome
+```
+
+### 2. Clonar o projeto
+
+```bash
+git clone https://github.com/golgol2/Live-do-Abismo-Thiago-Reyeres.git
+cd Live-do-Abismo-Thiago-Reyeres
+```
+
+Se estiver instalando em um caminho diferente do padrão usado na máquina de live, os scripts continuam funcionando porque calculam a raiz automaticamente. Quando precisar iniciar de fora da pasta do projeto, use:
+
+```bash
+export BONECO_GAME_DIR=/caminho/do/Live-do-Abismo-Thiago-Reyeres
+```
+
+### 3. Criar ambiente Python
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip setuptools wheel
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+Para usar geração de voz local com Coqui XTTS, instale também o pacote de live:
+
+```bash
+.venv/bin/python -m pip install -r requirements-live.txt
+```
+
+O XTTS é pesado e normalmente precisa de GPU/CUDA para uso confortável em live. Se o Torch instalado não combinar com sua placa/driver, ajuste a instalação do Torch conforme a versão CUDA da máquina antes de rodar a live real.
+
+### 4. Instalar o monitor TikTok em Node
+
+```bash
+cd external/tiktok-live-monitoring-server
+npm install
+cd ../..
+```
+
+### 5. Preparar Tor
+
+O monitor TikTok usa Tor por padrão em `127.0.0.1:9050`.
+
+```bash
+sudo systemctl enable --now tor
+ss -ltn '( sport = :9050 )'
+torsocks -a 127.0.0.1 -P 9050 getent hosts www.tiktok.com
+```
+
+Se o Tor não estiver ouvindo em `9050`, corrija isso antes de iniciar uma live.
+
+### 6. Criar pastas locais
+
+```bash
+mkdir -p private runs/logs
+```
+
+Arquivos de credenciais ficam em `private/` e não devem ser enviados ao GitHub.
+Configure pelo painel ou crie localmente os arquivos necessários, como:
+
+```text
+private/live_text_ai.json
+private/streamlabs_tiktok.json
+private/live_control.json
+```
+
+Não coloque token, chave RTMP, chave de API ou credenciais no README, em commits ou em prints públicos.
+
+### 7. Conferir assets locais
+
+Os vídeos, músicas e arquivos grandes ficam em `assets/` e normalmente não entram no GitHub.
+Antes da live, confira se existe pelo menos a estrutura do avatar padrão:
+
+```text
+assets/BONECO_MAPA_2D/
+├── Falando/
+├── Mudo/
+├── Musicas/
+└── frases/
+```
+
+Se os vídeos com fundo verde ainda não foram processados, use o botão **Processar fundos** no painel ou rode:
+
+```bash
+./scripts/process_green_avatar_videos.sh BONECO_MAPA_2D
+```
+
+### 8. Validar a instalação
+
+```bash
+.venv/bin/python -m compileall -q src/boneco_game
+node --check external/tiktok-live-monitoring-server/server.js
+gst-inspect-1.0 ximagesrc
+gst-inspect-1.0 pulsesrc
+gst-inspect-1.0 compositor
+gst-inspect-1.0 rtmp2sink
+```
+
+Se `rtmp2sink` não existir, confira se os plugins `bad` do GStreamer foram instalados. O painel também permite usar `rtmpsink`.
+
+### 9. Iniciar o painel
+
+Na raiz do projeto:
+
+```bash
+./scripts/start_clean_panel.sh
+```
+
+O painel abre em:
+
+```text
+http://127.0.0.1:9292/
+```
+
+Para iniciar manualmente sem limpeza completa:
+
+```bash
+./scripts/run_dev.sh
+```
+
+### 10. Testar antes da live
+
+Abra o preview do renderer sem iniciar transmissão:
+
+```text
+http://127.0.0.1:9292/renderer?preview=1
+```
+
+Para testar um layout específico:
+
+```text
+http://127.0.0.1:9292/renderer?preview=1&layout=zero_hours
+```
+
+Confira no painel:
+
+- status do monitor;
+- saúde da live;
+- fila de falas;
+- renderer;
+- transmissão;
+- configuração de áudio;
+- layout selecionado;
+- RTMP/Streamlabs.
+
+### 11. Iniciar e finalizar a live
+
+Com tudo configurado:
+
+1. abra o painel em `http://127.0.0.1:9292/`;
+2. confira Streamlabs ou RTMP manual;
+3. confira o monitor TikTok;
+4. clique em **Iniciar live**;
+5. acompanhe `/api/status` e `/api/live/health`;
+6. ao terminar, clique em **Finalizar live**.
+
+Para parar o servidor local depois dos testes:
+
+```bash
+./scripts/stop_dev.sh
+```
+
+### 12. Atualizar depois da instalação
+
+Na pasta do projeto:
+
+```bash
+git fetch --prune origin main
+git pull --ff-only origin main
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+Se também usa XTTS local:
+
+```bash
+.venv/bin/python -m pip install -r requirements-live.txt
+```
